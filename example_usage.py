@@ -1,6 +1,42 @@
 from cut_point_ranker import CutPointRanker, RankingConfig
+from speech_detector import SpeechTimestampDetector
 import os
 from pathlib import Path
+import cv2
+
+
+def speech_detection_example():
+    """Detect when speech ends in a talking head video"""
+    detector = SpeechTimestampDetector(model_size="base")
+
+    video_path = "D:/vertexcover/ai-video-cutter/dataset/AI/001_explainer.mp4"
+
+    speech_end_time = detector.get_speech_end_time(video_path)
+
+    if speech_end_time:
+        print(f"Speech ends at: {speech_end_time:.2f} seconds")
+        print(f"Starting visual analysis from: {speech_end_time:.2f}s")
+
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = frame_count / fps
+        cap.release()
+
+        ranker = CutPointRanker()
+        ranked_frames = ranker.rank_frames(
+            video_path=video_path,
+            start_time=speech_end_time,
+            end_time=duration,
+            sample_rate=2,
+            save_video=True
+        )
+
+        if ranked_frames:
+            best_frame = ranked_frames[0]
+            print(f"Best cut point: Frame {best_frame.frame_index} at {best_frame.timestamp:.2f}s (score: {best_frame.score:.4f})")
+    else:
+        print("No speech detected in the video")
 
 
 def basic_usage():
@@ -164,23 +200,28 @@ if __name__ == "__main__":
     print("CUT POINT RANKER - EXAMPLE USAGE")
     print("=" * 60)
 
-    # print("\n1. Basic Usage")
+    print("\n1. Speech Detection + Visual Analysis")
+    print("-" * 60)
+    speech_detection_example()
+
+    # print("\n2. Basic Usage")
     # print("-" * 60)
     # basic_usage()
 
-    # print("\n2. Detailed Analysis")
+    # print("\n3. Detailed Analysis")
     # print("-" * 60)
     # detailed_analysis()
 
-    # print("\n3. Custom Weights")
+    # print("\n4. Custom Weights")
     # print("-" * 60)
     # custom_weights()
 
-    print("\n4. Batch Processing")
-    print("-" * 60)
-    batch_usage(
-        video_dir="D:/vertexcover/ai-video-cutter/dataset/AI",
-        start_time=6.0,
-        end_time=8.0,
-        sample_rate=2
-    )
+    # print("\n5. Batch Processing")
+    # print("-" * 60)
+    # batch_usage(
+    #     video_dir="D:/vertexcover/ai-video-cutter/dataset/AI",
+    #     start_time=6.0,
+    #     end_time=8.0,
+    #     sample_rate=2
+    # )
+    speech_detection_example()

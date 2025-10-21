@@ -1,0 +1,10 @@
+[project]
+name = "cut-point-ranker"
+version = "0.1.0"
+description = "A pure ranking algorithm for finding optimal cut points in AI-generated talking head videos"
+requires-python = ">=3.12"
+dependencies = [
+    "mediapipe>=0.10.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+]

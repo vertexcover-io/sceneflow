@@ -180,13 +180,13 @@ class CutPointRanker:
 
     def _draw_feature_boxes(self, frame: np.ndarray) -> np.ndarray:
         """
-        Draw bounding boxes around tracked facial features.
+        Draw landmark dots for all MediaPipe facial features.
 
         Args:
             frame: Input frame
 
         Returns:
-            Frame with bounding boxes drawn
+            Frame with landmark dots drawn
         """
         import mediapipe as mp
 
@@ -207,69 +207,59 @@ class CutPointRanker:
         landmarks = results.multi_face_landmarks[0].landmark
         h, w = frame.shape[:2]
 
-        # Draw eyes
-        self._draw_eye_box(frame, landmarks, self.extractor.LEFT_EYE_INDICES, w, h,
-                          color=(0, 255, 0), label="Left Eye")
-        self._draw_eye_box(frame, landmarks, self.extractor.RIGHT_EYE_INDICES, w, h,
-                          color=(0, 255, 0), label="Right Eye")
+        # Define landmark groups with colors (BGR format)
+        # Eyes
+        left_eye_indices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+        right_eye_indices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
 
-        # Draw mouth region
-        mouth_indices = [78, 308, 13, 14]  # left, right, upper, lower
-        self._draw_landmark_box(frame, landmarks, mouth_indices, w, h,
-                               color=(255, 0, 0), label="Mouth")
+        # Eyebrows
+        left_eyebrow_indices = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
+        right_eyebrow_indices = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]
 
-        # Draw eyebrows
-        eyebrow_indices = [70, 300]  # left, right
-        self._draw_landmark_box(frame, landmarks, eyebrow_indices, w, h,
-                               color=(0, 255, 255), label="Eyebrows")
+        # Lips/Mouth outer
+        lips_outer_indices = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
 
-        # Draw pose reference points (nose, chin)
-        pose_indices = [1, 152, 10]  # nose tip, chin, forehead
-        self._draw_landmark_box(frame, landmarks, pose_indices, w, h,
-                               color=(255, 0, 255), label="Pose")
+        # Lips/Mouth inner
+        lips_inner_indices = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
+
+        # Nose
+        nose_indices = [1, 2, 98, 327, 289, 279, 331, 294, 358, 439, 438, 457, 459, 460, 326, 2, 98, 97, 2, 326, 370, 94, 19, 1, 4, 5, 6, 168, 188, 122, 6]
+
+        # Face oval
+        face_oval_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+
+        # Draw all landmarks with color coding
+        for i, landmark in enumerate(landmarks):
+            x = int(landmark.x * w)
+            y = int(landmark.y * h)
+
+            # Determine color based on landmark group
+            if i in left_eye_indices or i in right_eye_indices:
+                color = (0, 255, 0)  # Green for eyes
+            elif i in left_eyebrow_indices or i in right_eyebrow_indices:
+                color = (0, 255, 255)  # Yellow for eyebrows
+            elif i in lips_outer_indices or i in lips_inner_indices:
+                color = (255, 0, 0)  # Blue for mouth/lips
+            elif i in nose_indices:
+                color = (255, 0, 255)  # Magenta for nose
+            elif i in face_oval_indices:
+                color = (255, 255, 0)  # Cyan for face oval
+            else:
+                color = (200, 200, 200)  # Light gray for other landmarks
+
+            # Draw dot
+            cv2.circle(frame, (x, y), 2, color, -1)
+
+        # Add legend
+        legend_y = 30
+        cv2.putText(frame, "Eyes", (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(frame, "Eyebrows", (10, legend_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        cv2.putText(frame, "Mouth", (10, legend_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        cv2.putText(frame, "Nose", (10, legend_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+        cv2.putText(frame, "Face Oval", (10, legend_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
         face_mesh.close()
         return frame
-
-    def _draw_eye_box(self, frame: np.ndarray, landmarks, indices, w, h, color, label):
-        """Draw bounding box around eye landmarks."""
-        points = np.array([
-            [int(landmarks[i].x * w), int(landmarks[i].y * h)]
-            for i in indices
-        ])
-
-        x_min, y_min = points.min(axis=0)
-        x_max, y_max = points.max(axis=0)
-
-        padding = 10
-        x_min = max(0, x_min - padding)
-        y_min = max(0, y_min - padding)
-        x_max = min(w, x_max + padding)
-        y_max = min(h, y_max + padding)
-
-        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
-        cv2.putText(frame, label, (x_min, y_min - 5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-    def _draw_landmark_box(self, frame: np.ndarray, landmarks, indices, w, h, color, label):
-        """Draw bounding box around specified landmarks."""
-        points = np.array([
-            [int(landmarks[i].x * w), int(landmarks[i].y * h)]
-            for i in indices
-        ])
-
-        x_min, y_min = points.min(axis=0)
-        x_max, y_max = points.max(axis=0)
-
-        padding = 15
-        x_min = max(0, x_min - padding)
-        y_min = max(0, y_min - padding)
-        x_max = min(w, x_max + padding)
-        y_max = min(h, y_max + padding)
-
-        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
-        cv2.putText(frame, label, (x_min, y_min - 5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     def _save_cut_video(self, video_path: str, cut_timestamp: float) -> None:
         """
@@ -289,11 +279,13 @@ class CutPointRanker:
         output_path = output_dir / output_filename
 
         # Use ffmpeg to cut the video from start to cut_timestamp
+        # Re-encode for frame-accurate cutting (slower but accurate)
         cmd = [
             'ffmpeg',
             '-i', video_path,
             '-t', str(cut_timestamp),
-            '-c', 'copy',
+            '-c:v', 'libx264',  # Re-encode video for frame accuracy
+            '-c:a', 'aac',      # Re-encode audio
             '-y',  # Overwrite output file if exists
             str(output_path)
         ]

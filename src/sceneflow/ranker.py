@@ -1,6 +1,10 @@
+import warnings
+import os
+warnings.filterwarnings('ignore')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 import cv2
 import numpy as np
-import os
 from pathlib import Path
 from typing import List, Tuple, Optional
 from .config import RankingConfig
@@ -23,7 +27,7 @@ class CutPointRanker:
         start_time: float,
         end_time: float,
         sample_rate: int = 1,
-        save_frames: bool = True,
+        save_frames: bool = False,
         save_video: bool = False
     ) -> List[RankedFrame]:
         """

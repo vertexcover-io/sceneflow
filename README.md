@@ -141,24 +141,18 @@ The algorithm uses a multi-stage ranking process:
 ## CLI Options
 
 ```bash
-sceneflow VIDEO_PATH [OPTIONS]
+sceneflow SOURCE [OPTIONS]
 
 Arguments:
-  VIDEO_PATH              Path to video file or URL
+  SOURCE                  Path to video file or URL
 
 Options:
   --verbose              Show detailed analysis information
-  --json PATH            Save detailed analysis to JSON file (directory path)
-  --model-size TEXT      Whisper model size: tiny, base, small, medium, large
-                        (default: small)
+  --json-output PATH     Save detailed analysis to JSON file (directory path)
   --sample-rate INT      Process every Nth frame (default: 2)
-
-  # Custom weights (must sum to 1.0):
-  --eye-weight FLOAT     Eye openness weight (default: 0.30)
-  --motion-weight FLOAT  Motion stability weight (default: 0.25)
-  --expression-weight FLOAT  Expression neutrality weight (default: 0.20)
-  --pose-weight FLOAT    Pose stability weight (default: 0.15)
-  --sharpness-weight FLOAT   Visual sharpness weight (default: 0.10)
+  --save-frames          Save annotated frames with MediaPipe landmarks
+  --save-video           Save cut video from start to best timestamp (requires ffmpeg)
+  --top-n INT            Return top N ranked timestamps in sorted order (shows scores)
 
   --help                 Show this message and exit
   --version              Show version and exit

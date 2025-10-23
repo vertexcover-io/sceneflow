@@ -50,6 +50,8 @@ coverage.xml
 CLAUDE.md
 PACKAGING_SUMMARY.md
 PUBLISHING.md
+**/_version.py
+
 
 # Jupyter Notebook
 .ipynb_checkpoints

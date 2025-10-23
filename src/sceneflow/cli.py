@@ -104,7 +104,7 @@ def _get_video_duration(video_path: str) -> float:
 
 @app.default
 def main(
-    video_path: Annotated[str, cyclopts.Parameter(help="Path to video file or URL")],
+    source: Annotated[str, cyclopts.Parameter(help="Path to video file or URL")],
     verbose: Annotated[bool, cyclopts.Parameter(help="Show detailed analysis information")] = False,
     json_output: Annotated[Optional[str], cyclopts.Parameter(help="Save detailed analysis to JSON file (directory path)")] = None,
     sample_rate: Annotated[int, cyclopts.Parameter(help="Process every Nth frame (default: 2)")] = 2,
@@ -142,21 +142,21 @@ def main(
         sceneflow video.mp4 --save-frames --save-video
     """
     # Download video if URL
-    if _is_url(video_path):
+    if _is_url(source):
         if verbose:
             print(f"Downloading video from URL...")
         logger.info("Source is URL, downloading video...")
-        video_path = _download_video(video_path)
+        source = _download_video(source)
         if verbose:
-            print(f"Downloaded to: {video_path}")
+            print(f"Downloaded to: {source}")
 
     # Validate video path
-    if not Path(video_path).exists():
-        logger.error(f"Video file not found: {video_path}")
-        print(f"Error: Video file not found: {video_path}", file=sys.stderr)
+    if not Path(source).exists():
+        logger.error(f"Video file not found: {source}")
+        print(f"Error: Video file not found: {source}", file=sys.stderr)
         sys.exit(1)
 
-    logger.info(f"Analyzing video: {Path(video_path).name}")
+    logger.info(f"Analyzing video: {Path(source).name}")
 
     try:
         # Step 1: Speech Detection
@@ -164,13 +164,13 @@ def main(
             print("=" * 60)
             print("SCENEFLOW - Smart Video Cut Point Detection")
             print("=" * 60)
-            print(f"\nAnalyzing: {Path(video_path).name}")
+            print(f"\nAnalyzing: {Path(source).name}")
             print(f"\n[1/2] Detecting speech end time using VAD...")
 
         logger.info("Stage 1/2: Detecting speech end time...")
         detector = SpeechDetector()
         speech_end_time, confidence = detector.get_speech_end_time(
-            video_path,
+            source,
             return_confidence=True
         )
         logger.info(f"Speech ends at: {speech_end_time:.2f}s (confidence: {confidence:.2f})")
@@ -179,7 +179,7 @@ def main(
             print(f"      Speech ends at: {speech_end_time:.2f}s (confidence: {confidence:.2f})")
 
         # Get video duration
-        duration = _get_video_duration(video_path)
+        duration = _get_video_duration(source)
         logger.info(f"Video duration: {duration:.2f}s")
 
         if verbose:
@@ -190,7 +190,7 @@ def main(
         logger.info("Stage 2/2: Ranking frames based on visual quality...")
         ranker = CutPointRanker()
         ranked_frames = ranker.rank_frames(
-            video_path=video_path,
+            video_path=source,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
@@ -233,7 +233,7 @@ def main(
                     print(f"\n{'=' * 60}")
                     print("OUTPUT FILES")
                     print(f"{'=' * 60}")
-                    video_name = Path(video_path).stem
+                    video_name = Path(source).stem
                     if save_frames:
                         print(f"Annotated frames: output/{video_name}/")
                     if save_video:
@@ -263,7 +263,7 @@ def main(
                 print(f"\n{'=' * 60}")
                 print("OUTPUT FILES")
                 print(f"{'=' * 60}")
-                video_name = Path(video_path).stem
+                video_name = Path(source).stem
                 if save_frames:
                     print(f"Annotated frames: output/{video_name}/")
                 if save_video:
@@ -279,12 +279,12 @@ def main(
             json_dir = Path(json_output)
             json_dir.mkdir(parents=True, exist_ok=True)
 
-            video_name = Path(video_path).stem
+            video_name = Path(source).stem
             json_path = json_dir / f"{video_name}_analysis.json"
 
             # Get detailed scores
             detailed_scores = ranker.get_detailed_scores(
-                video_path=video_path,
+                video_path=source,
                 start_time=speech_end_time,
                 end_time=duration,
                 sample_rate=sample_rate
@@ -294,7 +294,7 @@ def main(
             json_candidate_count = min(top_n, len(ranked_frames)) if top_n is not None else 10
 
             analysis_data = {
-                'video_path': str(video_path),
+                'video_path': str(source),
                 'video_name': video_name,
                 'duration': duration,
                 'speech_detection': {

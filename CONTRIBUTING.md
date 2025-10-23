@@ -7,7 +7,7 @@ Thank you for your interest in contributing to SceneFlow! This document provides
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/sceneflow.git
+git clone https://github.com/vertexcover-io/sceneflow.git
 cd sceneflow
 ```
 

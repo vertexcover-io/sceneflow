@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "sceneflow"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Smart video cut point detection for AI-generated talking head videos using multi-factor visual analysis and speech detection"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -95,3 +95,9 @@ python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/sceneflow/_version.py"

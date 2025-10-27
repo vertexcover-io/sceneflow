@@ -31,6 +31,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+output_old/
 # PyInstaller
 *.manifest
 *.spec

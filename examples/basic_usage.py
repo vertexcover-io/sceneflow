@@ -16,20 +16,13 @@ logging.basicConfig(
 
 
 def main():
-    video_path = "your_video.mp4"
+    video_path = "D:/vertexcover/ai-video-cutter/dataset/AI/001_explainer.mp4"
 
     print("SceneFlow - Basic Usage Example")
     print("=" * 60)
     print(f"Finding best cut point in: {video_path}")
     print()
-
-    # Get the best cut point timestamp
-    # This automatically:
-    # 1. Detects when speech ends
-    # 2. Analyzes all frames after speech ends
-    # 3. Returns the timestamp of the best frame
-    best_time = get_cut_frame(video_path)
-
+    best_time = get_cut_frame(video_path, save_frames=True, save_video=True, save_logs=True)
     print()
     print("=" * 60)
     print(f"✓ Best cut point: {best_time:.2f} seconds")

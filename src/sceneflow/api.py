@@ -124,7 +124,8 @@ def get_cut_frame(
     config: Optional[RankingConfig] = None,
     sample_rate: int = 2,
     save_video: bool = False,
-    save_frames: bool = False
+    save_frames: bool = False,
+    save_logs: bool= False
 ) -> float:
     """
     Get the single best cut point timestamp for a video.
@@ -181,7 +182,8 @@ def get_cut_frame(
             end_time=duration,
             sample_rate=sample_rate,
             save_video=save_video,
-            save_frames=save_frames
+            save_frames=save_frames,
+            save_logs=save_logs
         )
 
         if not ranked_frames:

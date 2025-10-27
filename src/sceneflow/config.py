@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 @dataclass
 class RankingConfig:
-    # Base scoring weights
     eye_openness_weight: float = 0.30
     motion_stability_weight: float = 0.25
     expression_neutrality_weight: float = 0.20
@@ -15,6 +14,10 @@ class RankingConfig:
     # Multi-stage ranking parameters
     quality_gate_percentile: float = 75.0
     local_stability_window: int = 5
+
+    # Multi-face detection parameters
+    center_weighting_strength: float = 1.0      # Controls center distance weighting (higher = stronger center bias)
+    min_face_confidence: float = 0.5            # Minimum confidence for face detection (0-1)
 
     def validate(self):
         total = (

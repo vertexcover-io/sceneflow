@@ -17,7 +17,7 @@ logging.basicConfig(
 
 
 def main():
-    video_path = "your_video.mp4"
+    video_path = "D:/vertexcover/ai-video-cutter/dataset/AI/002_explainer.mp4"
 
     n_results = 5
 
@@ -25,9 +25,6 @@ def main():
     print("=" * 60)
     print(f"Finding top {n_results} cut points in: {video_path}")
     print()
-
-    # Get top N cut points
-    # Returns a list of timestamps, ordered by ranking (best first)
     top_cuts = get_ranked_cut_frames(video_path, n=n_results)
 
     print()

@@ -18,7 +18,10 @@ class CutPointRanker:
         self.config = config or RankingConfig()
         self.config.validate()
 
-        self.extractor = FeatureExtractor()
+        self.extractor = FeatureExtractor(
+            center_weighting_strength=self.config.center_weighting_strength,
+            min_face_confidence=self.config.min_face_confidence
+        )
         self.scorer = FrameScorer(self.config)
 
     def rank_frames(
@@ -28,7 +31,8 @@ class CutPointRanker:
         end_time: float,
         sample_rate: int = 1,
         save_frames: bool = False,
-        save_video: bool = False
+        save_video: bool = False,
+        save_logs: bool = False
     ) -> List[RankedFrame]:
         """
         Rank frames in the given time range for optimal cut points.
@@ -41,6 +45,7 @@ class CutPointRanker:
             sample_rate: Process every Nth frame (1 = all frames)
             save_frames: If True, save frames with bounding boxes showing tracked features
             save_video: If True, cut video from start to best timestamp and save as <filename>_cut.mp4
+            save_logs: If True, save detailed analysis data to JSONL files for each frame
 
         Returns:
             List of RankedFrame sorted by score (best first) with temporal diversity
@@ -52,7 +57,6 @@ class CutPointRanker:
 
         scores = self.scorer.compute_scores(features)
 
-        # Sort by final score (best first)
         sorted_scores = sorted(scores, key=lambda x: x.final_score, reverse=True)
 
         ranked_frames = [
@@ -67,6 +71,9 @@ class CutPointRanker:
 
         if save_frames:
             self._save_ranked_frames(video_path, ranked_frames)
+
+        if save_logs:
+            self._save_frame_logs(video_path, ranked_frames, features, scores)
 
         if save_video and ranked_frames:
             self._save_cut_video(video_path, ranked_frames[0].timestamp)
@@ -110,6 +117,8 @@ class CutPointRanker:
         start_frame = int(start_time * fps)
         end_frame = int(end_time * fps)
 
+        print(f"start frame : {start_frame} , end frame : {end_frame}")
+
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         self.extractor.reset()
@@ -125,10 +134,12 @@ class CutPointRanker:
             if (current_frame_idx - start_frame) % sample_rate == 0:
                 timestamp = current_frame_idx / fps
 
-                eye_openness = self.extractor.extract_eye_openness(frame)
+                # Extract all faces and get aggregated metrics
+                num_faces, face_features_list, (eye_openness, expression_activity, pose_deviation) = \
+                    self.extractor.extract_all_faces(frame)
+
+                # Extract frame-level metrics (not face-specific)
                 motion_magnitude = self.extractor.extract_motion_magnitude(frame)
-                expression_activity = self.extractor.extract_expression_activity(frame)
-                pose_deviation = self.extractor.extract_pose_deviation(frame)
                 sharpness = self.extractor.extract_visual_sharpness(frame)
 
                 features.append(FrameFeatures(
@@ -138,7 +149,9 @@ class CutPointRanker:
                     motion_magnitude=motion_magnitude,
                     expression_activity=expression_activity,
                     pose_deviation=pose_deviation,
-                    sharpness=sharpness
+                    sharpness=sharpness,
+                    num_faces=num_faces,
+                    individual_faces=face_features_list if face_features_list else None
                 ))
 
             current_frame_idx += 1
@@ -182,87 +195,167 @@ class CutPointRanker:
         cap.release()
         print(f"Saved {len(ranked_frames)} annotated frames to: {output_dir}")
 
+    def _save_frame_logs(
+        self,
+        video_path: str,
+        ranked_frames: List[RankedFrame],
+        features: List[FrameFeatures],
+        scores: List[FrameScore]
+    ) -> None:
+        import json
+
+        video_base_name = Path(video_path).stem
+        output_dir = Path("output") / video_base_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        frame_to_features = {f.frame_index: f for f in features}
+        frame_to_scores = {s.frame_index: s for s in scores}
+
+        for ranked_frame in ranked_frames:
+            frame_idx = ranked_frame.frame_index
+            feature = frame_to_features.get(frame_idx)
+            score = frame_to_scores.get(frame_idx)
+
+            if not feature or not score:
+                continue
+
+            log_data = {
+                "metadata": {
+                    "rank": ranked_frame.rank,
+                    "frame_index": ranked_frame.frame_index,
+                    "timestamp": ranked_frame.timestamp
+                },
+                "raw_features": {
+                    "eye_openness": feature.eye_openness,
+                    "motion_magnitude": feature.motion_magnitude,
+                    "expression_activity": feature.expression_activity,
+                    "pose_deviation": feature.pose_deviation,
+                    "sharpness": feature.sharpness,
+                    "num_faces": feature.num_faces
+                },
+                "individual_faces": [],
+                "normalized_scores": {
+                    "eye_openness_score": score.eye_openness_score,
+                    "motion_stability_score": score.motion_stability_score,
+                    "expression_neutrality_score": score.expression_neutrality_score,
+                    "pose_stability_score": score.pose_stability_score,
+                    "visual_sharpness_score": score.visual_sharpness_score
+                },
+                "score_breakdown": {
+                    "composite_score": score.composite_score,
+                    "context_score": score.context_score,
+                    "quality_penalty": score.quality_penalty,
+                    "stability_boost": score.stability_boost,
+                    "final_score": score.final_score
+                },
+                "configuration": {
+                    "eye_openness_weight": self.config.eye_openness_weight,
+                    "motion_stability_weight": self.config.motion_stability_weight,
+                    "expression_neutrality_weight": self.config.expression_neutrality_weight,
+                    "pose_stability_weight": self.config.pose_stability_weight,
+                    "visual_sharpness_weight": self.config.visual_sharpness_weight,
+                    "context_window_size": self.config.context_window_size,
+                    "quality_gate_percentile": self.config.quality_gate_percentile,
+                    "local_stability_window": self.config.local_stability_window,
+                    "center_weighting_strength": self.config.center_weighting_strength,
+                    "min_face_confidence": self.config.min_face_confidence
+                }
+            }
+
+            if feature.individual_faces:
+                for face in feature.individual_faces:
+                    log_data["individual_faces"].append({
+                        "face_index": face.face_index,
+                        "bbox": face.bbox,
+                        "center_distance": face.center_distance,
+                        "center_weight": face.center_weight,
+                        "eye_openness": face.eye_openness,
+                        "expression_activity": face.expression_activity,
+                        "pose_deviation": face.pose_deviation
+                    })
+
+            output_filename = (
+                f"rank_{ranked_frame.rank:03d}_"
+                f"frame_{ranked_frame.frame_index}_"
+                f"timestamp_{ranked_frame.timestamp:.2f}.jsonl"
+            )
+            output_path = output_dir / output_filename
+
+            with open(output_path, 'w') as f:
+                json.dump(log_data, f, indent=2)
+
+        print(f"Saved {len(ranked_frames)} log files to: {output_dir}")
+
     def _draw_feature_boxes(self, frame: np.ndarray) -> np.ndarray:
         """
-        Draw landmark dots for all MediaPipe facial features.
+        Draw landmark dots for all InsightFace 106 facial features for ALL detected faces.
 
         Args:
             frame: Input frame
 
         Returns:
-            Frame with landmark dots drawn
+            Frame with landmark dots drawn for all faces
         """
-        import mediapipe as mp
-
-        mp_face_mesh = mp.solutions.face_mesh
-        face_mesh = mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5
+        from .extractors import (
+            LEFT_EYE_INDICES, RIGHT_EYE_INDICES, MOUTH_OUTER_INDICES
         )
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb_frame)
+        faces = self.extractor.app.get(rgb_frame)
 
-        if not results.multi_face_landmarks:
+        if not faces or len(faces) == 0:
             return frame
 
-        landmarks = results.multi_face_landmarks[0].landmark
-        h, w = frame.shape[:2]
+        # Draw features for ALL detected faces
+        for face_idx, face in enumerate(faces):
+            # Draw bounding box
+            bbox = face.bbox.astype(int)
+            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
 
-        # Define landmark groups with colors (BGR format)
-        # Eyes
-        left_eye_indices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
-        right_eye_indices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+            # Add face number label
+            label = f"Face {face_idx + 1}"
+            cv2.putText(frame, label, (bbox[0], bbox[1] - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        # Eyebrows
-        left_eyebrow_indices = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
-        right_eyebrow_indices = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]
+            # Check if 106 landmarks are available
+            if self.extractor.has_106_landmarks and hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+                landmarks = face.landmark_2d_106.astype(int)
 
-        # Lips/Mouth outer
-        lips_outer_indices = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
+                # Draw all landmarks with color coding (BGR format)
+                for i, point in enumerate(landmarks):
+                    # Determine color based on landmark group
+                    if i in LEFT_EYE_INDICES or i in RIGHT_EYE_INDICES:
+                        color = (255, 0, 0)  # Blue for eyes
+                    elif i in MOUTH_OUTER_INDICES:
+                        color = (0, 0, 255)  # Red for mouth
+                    else:
+                        color = (200, 160, 75)  # Beige for other landmarks
 
-        # Lips/Mouth inner
-        lips_inner_indices = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
-
-        # Nose
-        nose_indices = [1, 2, 98, 327, 289, 279, 331, 294, 358, 439, 438, 457, 459, 460, 326, 2, 98, 97, 2, 326, 370, 94, 19, 1, 4, 5, 6, 168, 188, 122, 6]
-
-        # Face oval
-        face_oval_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-
-        # Draw all landmarks with color coding
-        for i, landmark in enumerate(landmarks):
-            x = int(landmark.x * w)
-            y = int(landmark.y * h)
-
-            # Determine color based on landmark group
-            if i in left_eye_indices or i in right_eye_indices:
-                color = (0, 255, 0)  # Green for eyes
-            elif i in left_eyebrow_indices or i in right_eyebrow_indices:
-                color = (0, 255, 255)  # Yellow for eyebrows
-            elif i in lips_outer_indices or i in lips_inner_indices:
-                color = (255, 0, 0)  # Blue for mouth/lips
-            elif i in nose_indices:
-                color = (255, 0, 255)  # Magenta for nose
-            elif i in face_oval_indices:
-                color = (255, 255, 0)  # Cyan for face oval
+                    # Draw dot
+                    cv2.circle(frame, tuple(point), 1, color, -1)
             else:
-                color = (200, 200, 200)  # Light gray for other landmarks
+                # Fallback: draw 5-point landmarks if available
+                if hasattr(face, 'kps') and face.kps is not None:
+                    landmarks = face.kps.astype(int)
+                    landmark_names = ['Left Eye', 'Right Eye', 'Nose', 'Left Mouth', 'Right Mouth']
+                    colors = [
+                        (255, 0, 0),    # Left eye - Blue
+                        (255, 0, 0),    # Right eye - Blue
+                        (0, 255, 255),  # Nose - Yellow
+                        (0, 0, 255),    # Left mouth - Red
+                        (0, 0, 255)     # Right mouth - Red
+                    ]
 
-            # Draw dot
-            cv2.circle(frame, (x, y), 2, color, -1)
+                    for point, name, color in zip(landmarks, landmark_names, colors):
+                        cv2.circle(frame, (point[0], point[1]), 3, color, -1)
 
-        # Add legend
+        # Add legend (only once for all faces)
         legend_y = 30
-        cv2.putText(frame, "Eyes", (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(frame, "Eyebrows", (10, legend_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        cv2.putText(frame, "Mouth", (10, legend_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        cv2.putText(frame, "Nose", (10, legend_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
-        cv2.putText(frame, "Face Oval", (10, legend_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        cv2.putText(frame, f"Faces: {len(faces)}", (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(frame, "Eyes (Blue)", (10, legend_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        cv2.putText(frame, "Mouth (Red)", (10, legend_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        cv2.putText(frame, "Other (Beige)", (10, legend_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 160, 75), 1)
 
-        face_mesh.close()
         return frame
 
     def _save_cut_video(self, video_path: str, cut_timestamp: float) -> None:

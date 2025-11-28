@@ -30,7 +30,7 @@ class FrameScorer:
         # (not too wide, not blinking)
         eye_openness_scores = MetricNormalizer.normalize_gaussian(
             [f.eye_openness for f in features],
-            target=None,   # Use median as target (typically ~0.28-0.30)
+            target=None,   # Use median as target
             sigma=None,    # Use data std
             inverse=False  # Peak at median (normal eye openness) gets score 1.0
         )

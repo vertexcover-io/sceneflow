@@ -22,7 +22,8 @@ keywords = [
     "talking-head",
     "cut-point",
     "video-analysis",
-    "mediapipe",
+    "insightface",
+    "facial-landmarks",
     "silero-vad"
 ]
 classifiers = [
@@ -44,10 +45,13 @@ classifiers = [
 dependencies = [
     "cyclopts>=2.0.0",
     "hatchling>=1.27.0",
+    "insightface>=0.7.3",
     "librosa>=0.11.0",
-    "mediapipe>=0.10.0",
     "numpy>=1.24.0",
+    "onnxruntime>=1.20.1",
     "opencv-python>=4.8.0",
+    "openai>=1.0.0",
+    "pyairtable>=3.2.0",
     "requests>=2.31.0",
     "silero-vad>=6.0.0",
     "torch>=2.0.0",

@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 from .speech_detector import SpeechDetector
 from .ranker import CutPointRanker
 from .config import RankingConfig
+from .llm_selector import LLMFrameSelector
+from .energy_refiner import EnergyRefiner
 
 
 def _is_url(source: str) -> bool:
@@ -124,7 +126,17 @@ def get_cut_frame(
     config: Optional[RankingConfig] = None,
     sample_rate: int = 2,
     save_video: bool = False,
-    save_frames: bool = False
+    save_frames: bool = False,
+    save_logs: bool = False,
+    upload_to_airtable: bool = False,
+    airtable_access_token: Optional[str] = None,
+    airtable_base_id: Optional[str] = None,
+    airtable_table_name: Optional[str] = None,
+    use_llm_selection: bool = False,
+    openai_api_key: Optional[str] = None,
+    use_energy_refinement: bool = True,
+    energy_threshold_db: float = 8.0,
+    energy_lookback_frames: int = 20
 ) -> float:
     """
     Get the single best cut point timestamp for a video.
@@ -132,8 +144,11 @@ def get_cut_frame(
     This is a high-level convenience function that handles the complete pipeline:
     1. Downloads video if source is a URL
     2. Detects when speech ends using Silero VAD
-    3. Ranks all frames after speech ends
-    4. Returns the timestamp of the best cut point
+    3. Optionally refines VAD timestamp using audio energy analysis
+    4. Ranks all frames after speech ends
+    5. Optionally uses LLM vision model to select best from top 5 candidates
+    6. Returns the timestamp of the best cut point
+    7. Optionally uploads results to Airtable
 
     Args:
         source: Video file path or direct video URL (e.g., .mp4 URL)
@@ -141,12 +156,22 @@ def get_cut_frame(
         sample_rate: Process every Nth frame (default: 2 for speed)
         save_video: If True, saves cut video to output directory
         save_frames: If True, saves annotated frames with landmarks
+        save_logs: If True, saves detailed analysis logs
+        upload_to_airtable: If True, uploads results to Airtable
+        airtable_access_token: Airtable access token (defaults to AIRTABLE_ACCESS_TOKEN env var)
+        airtable_base_id: Airtable base ID (defaults to AIRTABLE_BASE_ID env var)
+        airtable_table_name: Table name (defaults to AIRTABLE_TABLE_NAME or "SceneFlow Analysis")
+        use_llm_selection: If True, uses GPT-4o to select best from top 5 frames (default: True)
+        openai_api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+        use_energy_refinement: If True, refines VAD timestamp using energy drops (default: True)
+        energy_threshold_db: Minimum dB drop to consider speech end (default: 8.0)
+        energy_lookback_frames: Maximum frames to search backward from VAD (default: 20)
 
     Returns:
         Timestamp in seconds of the best cut point
 
     Raises:
-        RuntimeError: If video processing fails
+        RuntimeError: If video processing or Airtable upload fails
     """
     logger.info("=" * 60)
     logger.info("SceneFlow: Finding optimal cut point")
@@ -163,36 +188,133 @@ def get_cut_frame(
 
     try:
         # Stage 1: Detect when speech ends
-        logger.info("Stage 1/2: Detecting speech end time...")
+        logger.info("Stage 1: Detecting speech end time...")
         detector = SpeechDetector()
-        speech_end_time = detector.get_speech_end_time(video_path)
-        logger.info(f"Speech ends at: {speech_end_time:.2f}s")
+        vad_speech_end_time = detector.get_speech_end_time(video_path)
+        logger.info(f"VAD detected speech end at: {vad_speech_end_time:.2f}s")
+
+        # Stage 1.5: Refine with energy analysis
+        speech_end_time = vad_speech_end_time
+        if use_energy_refinement:
+            logger.info("Stage 1.5: Refining speech end time with energy analysis...")
+            refiner = EnergyRefiner(
+                threshold_db=energy_threshold_db,
+                lookback_frames=energy_lookback_frames
+            )
+            speech_end_time, metadata = refiner.refine_speech_end(vad_speech_end_time, video_path)
+
+            if metadata['frames_adjusted'] > 0:
+                logger.info(f"Energy refinement adjusted timestamp by {metadata['frames_adjusted']} frames")
+            else:
+                logger.info("Energy refinement: No adjustment needed")
 
         # Get video duration
         duration = _get_video_duration(video_path)
-        logger.info(f"Analyzing frames from {speech_end_time:.2f}s to {duration:.2f}s")
+        logger.info(f"Analyzing frames from {speech_end_time:.4f}s to {duration:.4f}s")
 
         # Stage 2: Rank frames after speech ends
-        logger.info("Stage 2/2: Ranking frames based on visual quality...")
+        logger.info("Stage 2: Ranking frames based on visual quality...")
         ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-            save_video=save_video,
-            save_frames=save_frames
-        )
+
+        if upload_to_airtable or use_llm_selection:
+            # Disable save_video in ranker if using LLM selection
+            # (we'll save after LLM picks the best frame)
+            ranked_frames, features, scores = ranker.rank_frames(
+                video_path=video_path,
+                start_time=speech_end_time,
+                end_time=duration,
+                sample_rate=sample_rate,
+                save_video=False,  # Disable here, save later with correct timestamp
+                save_frames=save_frames,
+                save_logs=save_logs,
+                return_internals=True
+            )
+        else:
+            ranked_frames = ranker.rank_frames(
+                video_path=video_path,
+                start_time=speech_end_time,
+                end_time=duration,
+                sample_rate=sample_rate,
+                save_video=save_video,
+                save_frames=save_frames,
+                save_logs=save_logs
+            )
 
         if not ranked_frames:
             logger.error("No valid frames found for ranking")
             raise RuntimeError("No valid frames found for ranking")
 
-        # Return the timestamp of the best frame
-        best_timestamp = ranked_frames[0].timestamp
+        best_frame = ranked_frames[0]
+
+        if use_llm_selection and len(ranked_frames) > 1:
+            try:
+                logger.info("Stage 3: Using LLM to select best frame from top 5 candidates...")
+                selector = LLMFrameSelector(api_key=openai_api_key)
+                best_frame = selector.select_best_frame(
+                    video_path=video_path,
+                    ranked_frames=ranked_frames[:5],
+                    speech_end_time=speech_end_time,
+                    video_duration=duration,
+                    all_scores=scores,
+                    all_features=features
+                )
+                logger.info(f"LLM selected frame at {best_frame.timestamp:.2f}s : frame {best_frame.frame_index}")
+            except Exception as e:
+                logger.warning(f"LLM selection failed: {str(e)}, using top algorithmic result")
+                best_frame = ranked_frames[0]
+
+        best_timestamp = best_frame.timestamp
         logger.info("=" * 60)
-        logger.info(f"Best cut point found: {best_timestamp:.2f}s (score: {ranked_frames[0].score:.4f})")
+        logger.info(f"Best cut point found: {best_timestamp:.4f}s (score: {best_frame.score:.4f}) : frame {best_frame.frame_index}")
         logger.info("=" * 60)
+
+        # Save video with the correct timestamp (after LLM selection if enabled)
+        if save_video:
+            ranker._save_cut_video(video_path, best_timestamp)
+
+        # Upload to Airtable if requested
+        if upload_to_airtable:
+            try:
+                from .airtable_uploader import upload_to_airtable as airtable_upload
+
+                logger.info("Uploading results to Airtable...")
+
+                best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
+                best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
+
+                if best_score and best_features:
+                    config_dict = {
+                        "sample_rate": sample_rate,
+                        "weights": {
+                            "eye_openness": config.eye_openness_weight if config else 0.30,
+                            "motion_stability": config.motion_stability_weight if config else 0.25,
+                            "expression_neutrality": config.expression_neutrality_weight if config else 0.20,
+                            "pose_stability": config.pose_stability_weight if config else 0.15,
+                            "visual_sharpness": config.visual_sharpness_weight if config else 0.10
+                        }
+                    }
+
+                    record_id = airtable_upload(
+                        video_path=video_path,
+                        best_frame=best_frame,
+                        frame_score=best_score,
+                        frame_features=best_features,
+                        speech_end_time=speech_end_time,
+                        duration=duration,
+                        config_dict=config_dict,
+                        access_token=airtable_access_token,
+                        base_id=airtable_base_id,
+                        table_name=airtable_table_name
+                    )
+
+                    logger.info(f"Successfully uploaded to Airtable! Record ID: {record_id}")
+                else:
+                    logger.warning("Could not upload to Airtable - missing score or features data")
+
+            except Exception as e:
+                logger.error(f"Failed to upload to Airtable: {str(e)}")
+                # Don't fail the entire function, just log the error
+                raise RuntimeError(f"Airtable upload failed: {str(e)}")
 
         return best_timestamp
 
@@ -207,7 +329,14 @@ def get_ranked_cut_frames(
     n: int = 5,
     config: Optional[RankingConfig] = None,
     sample_rate: int = 2,
-    save_frames: bool = False
+    save_frames: bool = False,
+    upload_to_airtable: bool = False,
+    airtable_access_token: Optional[str] = None,
+    airtable_base_id: Optional[str] = None,
+    airtable_table_name: Optional[str] = None,
+    use_energy_refinement: bool = True,
+    energy_threshold_db: float = 8.0,
+    energy_lookback_frames: int = 20
 ) -> List[float]:
     """
     Get the top N best cut point timestamps for a video.
@@ -215,8 +344,10 @@ def get_ranked_cut_frames(
     This is a high-level convenience function that handles the complete pipeline:
     1. Downloads video if source is a URL
     2. Detects when speech ends using Silero VAD
-    3. Ranks all frames after speech ends
-    4. Returns the timestamps of the top N cut points
+    3. Optionally refines VAD timestamp using audio energy analysis
+    4. Ranks all frames after speech ends
+    5. Returns the timestamps of the top N cut points
+    6. Optionally uploads best result to Airtable
 
     Args:
         source: Video file path or direct video URL (e.g., .mp4 URL)
@@ -224,12 +355,19 @@ def get_ranked_cut_frames(
         config: Optional custom RankingConfig for scoring weights
         sample_rate: Process every Nth frame (default: 2 for speed)
         save_frames: If True, saves annotated frames with landmarks
+        upload_to_airtable: If True, uploads best result to Airtable
+        airtable_access_token: Airtable access token (defaults to AIRTABLE_ACCESS_TOKEN env var)
+        airtable_base_id: Airtable base ID (defaults to AIRTABLE_BASE_ID env var)
+        airtable_table_name: Table name (defaults to AIRTABLE_TABLE_NAME or "SceneFlow Analysis")
+        use_energy_refinement: If True, refines VAD timestamp using energy drops (default: True)
+        energy_threshold_db: Minimum dB drop to consider speech end (default: 8.0)
+        energy_lookback_frames: Maximum frames to search backward from VAD (default: 20)
 
     Returns:
         List of timestamps in seconds for the top N cut points, ordered by rank
 
     Raises:
-        RuntimeError: If video processing fails
+        RuntimeError: If video processing or Airtable upload fails
         ValueError: If n is less than 1
     """
     if n < 1:
@@ -250,26 +388,54 @@ def get_ranked_cut_frames(
 
     try:
         # Stage 1: Detect when speech ends
-        logger.info("Stage 1/2: Detecting speech end time...")
+        logger.info("Stage 1: Detecting speech end time...")
         detector = SpeechDetector()
-        speech_end_time = detector.get_speech_end_time(video_path)
-        logger.info(f"Speech ends at: {speech_end_time:.2f}s")
+        vad_speech_end_time = detector.get_speech_end_time(video_path)
+        logger.info(f"VAD detected speech end at: {vad_speech_end_time:.2f}s")
+
+        # Stage 1.5: Refine with energy analysis
+        speech_end_time = vad_speech_end_time
+        if use_energy_refinement:
+            logger.info("Stage 1.5: Refining speech end time with energy analysis...")
+            refiner = EnergyRefiner(
+                threshold_db=energy_threshold_db,
+                lookback_frames=energy_lookback_frames
+            )
+            speech_end_time, metadata = refiner.refine_speech_end(vad_speech_end_time, video_path)
+
+            if metadata['frames_adjusted'] > 0:
+                logger.info(f"Energy refinement adjusted timestamp by {metadata['frames_adjusted']} frames")
+            else:
+                logger.info("Energy refinement: No adjustment needed")
 
         # Get video duration
         duration = _get_video_duration(video_path)
-        logger.info(f"Analyzing frames from {speech_end_time:.2f}s to {duration:.2f}s")
+        logger.info(f"Analyzing frames from {speech_end_time:.4f}s to {duration:.4f}s")
 
         # Stage 2: Rank frames after speech ends
-        logger.info("Stage 2/2: Ranking frames based on visual quality...")
+        logger.info("Stage 2: Ranking frames based on visual quality...")
         ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-            save_video=False,
-            save_frames=save_frames
-        )
+
+        # Get internals if uploading to Airtable to avoid re-processing
+        if upload_to_airtable:
+            ranked_frames, features, scores = ranker.rank_frames(
+                video_path=video_path,
+                start_time=speech_end_time,
+                end_time=duration,
+                sample_rate=sample_rate,
+                save_video=False,
+                save_frames=save_frames,
+                return_internals=True
+            )
+        else:
+            ranked_frames = ranker.rank_frames(
+                video_path=video_path,
+                start_time=speech_end_time,
+                end_time=duration,
+                sample_rate=sample_rate,
+                save_video=False,
+                save_frames=save_frames
+            )
 
         if not ranked_frames:
             logger.error("No valid frames found for ranking")
@@ -282,6 +448,51 @@ def get_ranked_cut_frames(
         for i, (frame, timestamp) in enumerate(zip(ranked_frames[:n], top_timestamps), 1):
             logger.info(f"  {i}. {timestamp:.2f}s (score: {frame.score:.4f})")
         logger.info("=" * 60)
+
+        # Upload to Airtable if requested (only uploads the best frame)
+        if upload_to_airtable:
+            try:
+                from .airtable_uploader import upload_to_airtable as airtable_upload
+
+                logger.info("Uploading best result to Airtable...")
+
+                # Find score and features for best frame (already computed, no re-processing!)
+                best_score = next((s for s in scores if s.frame_index == ranked_frames[0].frame_index), None)
+                best_features = next((f for f in features if f.frame_index == ranked_frames[0].frame_index), None)
+
+                if best_score and best_features:
+                    # Prepare config dict
+                    config_dict = {
+                        "sample_rate": sample_rate,
+                        "weights": {
+                            "eye_openness": config.eye_openness_weight if config else 0.30,
+                            "motion_stability": config.motion_stability_weight if config else 0.25,
+                            "expression_neutrality": config.expression_neutrality_weight if config else 0.20,
+                            "pose_stability": config.pose_stability_weight if config else 0.15,
+                            "visual_sharpness": config.visual_sharpness_weight if config else 0.10
+                        }
+                    }
+
+                    record_id = airtable_upload(
+                        video_path=video_path,
+                        best_frame=ranked_frames[0],
+                        frame_score=best_score,
+                        frame_features=best_features,
+                        speech_end_time=speech_end_time,
+                        duration=duration,
+                        config_dict=config_dict,
+                        access_token=airtable_access_token,
+                        base_id=airtable_base_id,
+                        table_name=airtable_table_name
+                    )
+
+                    logger.info(f"Successfully uploaded to Airtable! Record ID: {record_id}")
+                else:
+                    logger.warning("Could not upload to Airtable - missing score or features data")
+
+            except Exception as e:
+                logger.error(f"Failed to upload to Airtable: {str(e)}")
+                raise RuntimeError(f"Airtable upload failed: {str(e)}")
 
         return top_timestamps
 

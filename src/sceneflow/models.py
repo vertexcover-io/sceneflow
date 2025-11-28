@@ -1,5 +1,24 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Tuple
+
+
+@dataclass
+class FaceFeatures:
+    """
+    Features extracted from a single face within a frame.
+
+    Used when multiple faces are detected in a single frame to track
+    per-face metrics before aggregation.
+    """
+    face_index: int           # Index of this face (0 = first detected)
+    bbox: Tuple[float, float, float, float]  # Bounding box (x1, y1, x2, y2)
+    center_distance: float    # Normalized distance from frame center (0-1)
+    center_weight: float      # Weight for center-weighted averaging (0-1)
+
+    # Per-face metrics
+    eye_openness: float       # Eye Aspect Ratio (EAR)
+    expression_activity: float # Facial expression activity
+    pose_deviation: float     # Head pose deviation
 
 
 @dataclass
@@ -9,16 +28,23 @@ class FrameFeatures:
 
     These are the unprocessed measurements that will be normalized
     and scored by the FrameScorer.
+
+    For multi-face frames, the top-level metrics (eye_openness, etc.) are
+    center-weighted aggregates, while individual_faces contains per-face data.
     """
     frame_index: int          # Absolute frame number in video
     timestamp: float          # Timestamp in seconds
 
-    # Visual features
+    # Aggregated visual features (center-weighted when multiple faces)
     eye_openness: float       # Eye Aspect Ratio (EAR) - normal ~0.25-0.35
     motion_magnitude: float   # Optical flow magnitude - lower is better
     expression_activity: float # Facial expression activity - lower is better
     pose_deviation: float     # Head pose deviation - lower is better
     sharpness: float         # Image sharpness (Laplacian variance) - higher is better
+
+    # Multi-face data
+    num_faces: int = 1        # Number of faces detected
+    individual_faces: Optional[List[FaceFeatures]] = None  # Per-face metrics
 
 
 @dataclass

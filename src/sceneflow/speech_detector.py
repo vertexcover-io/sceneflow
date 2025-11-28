@@ -10,6 +10,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 from pathlib import Path
 import torch
+import numpy as np
 import librosa
 from silero_vad import load_silero_vad, get_speech_timestamps
 
@@ -24,7 +25,7 @@ class SpeechDetector:
         except Exception as e:
             raise RuntimeError(f"Failed to load Silero VAD model: {str(e)}")
 
-    def _load_audio_for_vad(self, file_path: str) -> torch.Tensor:
+    def _load_audio_for_vad(self, file_path: str) -> tuple[torch.Tensor, int]:
         """
         Load audio file for VAD processing.
 
@@ -32,7 +33,7 @@ class SpeechDetector:
             file_path: Path to audio/video file
 
         Returns:
-            Audio as PyTorch tensor at 16kHz sample rate
+            Tuple of (audio tensor, sample rate)
         """
         # Load audio using librosa (handles both audio and video files)
         # Silero VAD expects 16kHz mono audio
@@ -41,7 +42,7 @@ class SpeechDetector:
         # Convert numpy array to PyTorch tensor
         audio_tensor = torch.from_numpy(audio).float()
 
-        return audio_tensor
+        return audio_tensor, sr
 
     def get_speech_end_time(
         self,
@@ -63,14 +64,24 @@ class SpeechDetector:
         """
         try:
             # Load audio for VAD
-            wav = self._load_audio_for_vad(file_path)
+            wav, sample_rate = self._load_audio_for_vad(file_path)
 
             # Get speech timestamps using VAD
+            # Pass the actual sample rate from librosa
+            # time_resolution=4 gives us 4 decimal places (0.0001s = 0.1ms accuracy)
             speech_timestamps = get_speech_timestamps(
                 wav,
                 self.vad_model,
-                return_seconds=True
+                return_seconds=True,
+                sampling_rate=sample_rate,
+                threshold=0.7,
+                neg_threshold=0.5,
+                min_silence_duration_ms=0,
+                speech_pad_ms=0,
+                time_resolution=4
             )
+
+            print("speech_timestamps",speech_timestamps)
 
             if not speech_timestamps:
                 # No speech detected

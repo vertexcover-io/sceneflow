@@ -5,55 +5,332 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import cv2
 import numpy as np
-import mediapipe as mp
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
+
+try:
+    import insightface
+    from insightface.app import FaceAnalysis
+except ImportError:
+    raise ImportError(
+        "insightface not installed. Install it using: uv add insightface onnxruntime"
+    )
+
+
+# Landmark indices for 106-point model (from test_insightface.py)
+LEFT_EYE_INDICES = list(range(35, 42))      # 7 points for left eye
+RIGHT_EYE_INDICES = list(range(42, 49))     # 7 points for right eye
+MOUTH_OUTER_INDICES = list(range(52, 72))   # 20 points for outer mouth
 
 
 class FeatureExtractor:
     """
     Extracts facial and visual features for determining optimal video cut points.
+    Uses InsightFace with 106-landmark detection for detailed facial analysis.
 
     Key principles:
-    - Lower expression activity = better cut point (neutral face)
     - Normal eye openness = better (not blinking, not wide open)
     - Lower motion = better (stable frame)
+    - Lower expression activity = better (neutral face)
     - Stable pose = better (facing camera directly)
     - Higher sharpness = better (clear image)
+
+    Multi-face support:
+    - Detects all faces in frame
+    - Uses center-weighted averaging for final metrics
+    - Closer faces to center have higher influence
     """
 
-    def __init__(self):
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5
-        )
+    def __init__(self, center_weighting_strength: float = 1.0, min_face_confidence: float = 0.5):
+        """
+        Initialize InsightFace with 106-landmark detection.
 
-        # MediaPipe Face Mesh landmark indices
-        # Eyes
-        self.LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
-        self.RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
+        Args:
+            center_weighting_strength: Controls how strongly center distance affects weighting
+            min_face_confidence: Minimum confidence threshold for face detection
+        """
+        self.center_weighting_strength = center_weighting_strength
+        self.min_face_confidence = min_face_confidence
+        print("Initializing InsightFace with 106-landmark detection...")
 
-        # Mouth - key points for aspect ratio
-        self.MOUTH_TOP = 13      # Upper lip center
-        self.MOUTH_BOTTOM = 14   # Lower lip center
-        self.MOUTH_LEFT = 78     # Left corner
-        self.MOUTH_RIGHT = 308   # Right corner
-
-        # Eyebrows
-        self.LEFT_EYEBROW_TOP = 70
-        self.RIGHT_EYEBROW_TOP = 300
-        self.LEFT_EYE_CENTER = 159
-        self.RIGHT_EYE_CENTER = 386
-
-        # Pose reference points
-        self.NOSE_TIP = 1
-        self.CHIN = 152
-        self.FOREHEAD = 10
+        try:
+            # Try to load with 106-landmark model
+            self.app = FaceAnalysis(
+                allowed_modules=['detection', 'landmark_2d_106'],
+                providers=['CPUExecutionProvider']
+            )
+            self.app.prepare(ctx_id=-1, det_size=(640, 640))
+            self.has_106_landmarks = True
+            print("Successfully loaded 106-landmark model")
+        except Exception as e:
+            print(f"Warning: Could not load 106-landmark model: {e}")
+            print("Falling back to standard 5-point detection...")
+            self.app = FaceAnalysis(providers=['CPUExecutionProvider'])
+            self.app.prepare(ctx_id=-1, det_size=(640, 640))
+            self.has_106_landmarks = False
 
         # Optical flow tracking
         self.prev_frame_gray = None
+
+    def _euclidean_distance(self, point1: np.ndarray, point2: np.ndarray) -> float:
+        """Calculate Euclidean distance between two points."""
+        return np.linalg.norm(point1 - point2)
+
+    def _calculate_ear(self, eye_landmarks: np.ndarray) -> float:
+        """
+        Calculate Eye Aspect Ratio (EAR) for blink detection.
+
+        EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+
+        For InsightFace 106-landmark 7-point eye model:
+        - Index 0: Leftmost corner
+        - Index 4: Rightmost corner
+        - Index 5: Top center
+        - Index 1: Bottom left
+        - Index 3: Center point
+        - Index 2: Bottom right
+
+        Lower EAR indicates closed/closing eyes (blinking).
+        Typical threshold: EAR < 0.25 indicates a blink.
+        Normal range: 0.25-0.35
+        """
+        if len(eye_landmarks) < 7:
+            return 0.3  # Default neutral value
+
+        # Horizontal distance (corner to corner)
+        C = self._euclidean_distance(eye_landmarks[0], eye_landmarks[4])
+
+        # Vertical distances (top-bottom pairs)
+        A = self._euclidean_distance(eye_landmarks[5], eye_landmarks[1])  # Top to bottom-left
+        B = self._euclidean_distance(eye_landmarks[3], eye_landmarks[2])  # Center to bottom-right
+
+        if C == 0:
+            return 0.3
+
+        ear = (A + B) / (2.0 * C)
+
+        # Sanity check: EAR should be in valid range
+        if ear < 0.10 or ear > 0.60:
+            return 0.3  # Return neutral value if calculation seems wrong
+
+        return ear
+
+    def _calculate_mar(self, mouth_landmarks: np.ndarray) -> float:
+        """
+        Calculate Mouth Aspect Ratio (MAR) for mouth openness detection.
+
+        MAR = (||p2-p10|| + ||p4-p8||) / (2 * ||p0-p6||)
+
+        For InsightFace 106-landmark 20-point mouth model:
+        - Uses specific points for vertical (top-bottom) and horizontal (left-right) distances
+        - Higher MAR indicates mouth is open (talking, yawning)
+
+        Typical values:
+        - < 0.15: Closed mouth (BEST for cut points)
+        - 0.15-0.30: Slightly open
+        - > 0.30: Open mouth (talking/yawning - AVOID for cut points)
+        """
+        if len(mouth_landmarks) < 12:
+            return 0.2  # Default low activity (closed mouth)
+
+        # Vertical mouth distances
+        A = self._euclidean_distance(mouth_landmarks[2], mouth_landmarks[10])
+        B = self._euclidean_distance(mouth_landmarks[4], mouth_landmarks[8])
+
+        # Horizontal mouth distance
+        C = self._euclidean_distance(mouth_landmarks[0], mouth_landmarks[6])
+
+        if C == 0:
+            return 0.2
+
+        mar = (A + B) / (2.0 * C)
+
+        # Sanity check: MAR should be in valid range
+        # If calculation is way off, return default closed-mouth value
+        if mar < 0.0 or mar > 1.5:
+            return 0.2
+
+        return mar
+
+    def _calculate_center_distance(self, bbox: np.ndarray, frame_shape: Tuple[int, int]) -> float:
+        """
+        Calculate normalized distance from frame center to face center.
+
+        Args:
+            bbox: Face bounding box [x1, y1, x2, y2]
+            frame_shape: Frame dimensions (height, width)
+
+        Returns:
+            float: Normalized distance from center (0 = at center, 1 = at edge)
+        """
+        frame_h, frame_w = frame_shape
+        frame_center_x = frame_w / 2
+        frame_center_y = frame_h / 2
+
+        # Calculate face center
+        face_center_x = (bbox[0] + bbox[2]) / 2
+        face_center_y = (bbox[1] + bbox[3]) / 2
+
+        # Calculate Euclidean distance from frame center
+        dx = (face_center_x - frame_center_x) / frame_w
+        dy = (face_center_y - frame_center_y) / frame_h
+        distance = np.sqrt(dx**2 + dy**2)
+
+        # Normalize to [0, 1] - max possible distance is ~0.707 (corner to center)
+        normalized_distance = min(distance / 0.707, 1.0)
+
+        return float(normalized_distance)
+
+    def _calculate_center_weight(self, center_distance: float) -> float:
+        """
+        Calculate weight for center-weighted averaging based on distance from center.
+
+        Args:
+            center_distance: Normalized distance from center (0-1)
+
+        Returns:
+            float: Weight value (higher for faces closer to center)
+        """
+        # Apply center weighting: weight = 1 / (1 + strength * distance)
+        weight = 1.0 / (1.0 + self.center_weighting_strength * center_distance)
+        return float(weight)
+
+    def _aggregate_multi_face_metrics(
+        self,
+        face_features_list: list,
+        weights: list
+    ) -> Tuple[float, float, float]:
+        """
+        Aggregate metrics from multiple faces using weighted averaging.
+
+        Args:
+            face_features_list: List of tuples (eye_openness, expression_activity, pose_deviation)
+            weights: List of weights corresponding to each face
+
+        Returns:
+            Tuple of aggregated (eye_openness, expression_activity, pose_deviation)
+        """
+        if not face_features_list or not weights:
+            return 0.3, 0.5, 0.5  # Default penalty values
+
+        # Normalize weights to sum to 1.0
+        total_weight = sum(weights)
+        if total_weight == 0:
+            normalized_weights = [1.0 / len(weights)] * len(weights)
+        else:
+            normalized_weights = [w / total_weight for w in weights]
+
+        # Weighted average for each metric
+        eye_openness = sum(f[0] * w for f, w in zip(face_features_list, normalized_weights))
+        expression = sum(f[1] * w for f, w in zip(face_features_list, normalized_weights))
+        pose = sum(f[2] * w for f, w in zip(face_features_list, normalized_weights))
+
+        return float(eye_openness), float(expression), float(pose)
+
+    def extract_all_faces(self, frame: np.ndarray) -> Tuple[int, List, Tuple[float, float, float]]:
+        """
+        Extract features from all detected faces in the frame.
+
+        Returns:
+            Tuple containing:
+            - num_faces: Number of faces detected
+            - face_features_list: List of FaceFeatures objects (from models.py)
+            - aggregated_metrics: Tuple of (eye_openness, expression_activity, pose_deviation)
+        """
+        from .models import FaceFeatures
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        faces = self.app.get(rgb_frame)
+        frame_shape = frame.shape[:2]  # (height, width)
+
+        # Filter faces by confidence
+        if faces:
+            faces = [f for f in faces if hasattr(f, 'det_score') and f.det_score >= self.min_face_confidence]
+
+        if not faces or len(faces) == 0:
+            # No faces detected - return default values
+            return 0, [], (0.3, 0.5, 0.5)
+
+        face_features_list = []
+        face_metrics = []  # List of (eye_openness, expression, pose) tuples
+        weights = []
+
+        for face_idx, face in enumerate(faces):
+            # Calculate center distance and weight
+            bbox = face.bbox
+            center_distance = self._calculate_center_distance(bbox, frame_shape)
+            center_weight = self._calculate_center_weight(center_distance)
+
+            # Extract per-face metrics
+            eye_openness = self._extract_single_face_eye_openness(face)
+            expression_activity = self._extract_single_face_expression(face)
+            pose_deviation = self._extract_single_face_pose(face, bbox, frame_shape)
+
+            # Store per-face data
+            face_features_list.append(FaceFeatures(
+                face_index=face_idx,
+                bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),
+                center_distance=center_distance,
+                center_weight=center_weight,
+                eye_openness=eye_openness,
+                expression_activity=expression_activity,
+                pose_deviation=pose_deviation
+            ))
+
+            face_metrics.append((eye_openness, expression_activity, pose_deviation))
+            weights.append(center_weight)
+
+        # Aggregate metrics using center-weighted averaging
+        aggregated = self._aggregate_multi_face_metrics(face_metrics, weights)
+
+        return len(faces), face_features_list, aggregated
+
+    def _extract_single_face_eye_openness(self, face) -> float:
+        """Extract eye openness for a single face object."""
+        # Check if 106 landmarks are available
+        if self.has_106_landmarks and hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+            landmarks = face.landmark_2d_106.astype(int)
+
+            if len(landmarks) > max(LEFT_EYE_INDICES + RIGHT_EYE_INDICES):
+                left_eye_points = landmarks[LEFT_EYE_INDICES]
+                right_eye_points = landmarks[RIGHT_EYE_INDICES]
+
+                left_ear = self._calculate_ear(left_eye_points)
+                right_ear = self._calculate_ear(right_eye_points)
+
+                avg_ear = (left_ear + right_ear) / 2.0
+                return avg_ear
+
+        return 0.3  # Default neutral value
+
+    def _extract_single_face_expression(self, face) -> float:
+        """Extract expression activity for a single face object."""
+        # Check if 106 landmarks are available
+        if self.has_106_landmarks and hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+            landmarks = face.landmark_2d_106.astype(int)
+
+            if len(landmarks) > max(MOUTH_OUTER_INDICES):
+                mouth_points = landmarks[MOUTH_OUTER_INDICES]
+                mar = self._calculate_mar(mouth_points)
+
+                # MAR directly represents expression activity
+                # No need to normalize here - will be done in scorer.py
+                # Lower MAR = less activity (better for cut points)
+                return mar
+
+        return 0.2  # Default low activity (closed mouth)
+
+    def _extract_single_face_pose(self, face, bbox: np.ndarray, frame_shape: Tuple[int, int]) -> float:
+        """Extract pose deviation for a single face object."""
+        frame_h, frame_w = frame_shape
+        face_center_x = (bbox[0] + bbox[2]) / 2
+        face_center_y = (bbox[1] + bbox[3]) / 2
+
+        # Normalized deviation from center
+        center_x_dev = abs(face_center_x - frame_w/2) / (frame_w/2)
+        center_y_dev = abs(face_center_y - frame_h/2) / (frame_h/2)
+
+        deviation = (center_x_dev + center_y_dev) / 2.0
+        return float(deviation)
 
     def extract_eye_openness(self, frame: np.ndarray) -> float:
         """
@@ -66,39 +343,34 @@ class FeatureExtractor:
                    - > 0.4: Eyes wide open (surprise/speaking)
         """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_mesh.process(rgb_frame)
+        faces = self.app.get(rgb_frame)
 
-        if not results.multi_face_landmarks:
+        if not faces or len(faces) == 0:
             return 0.3  # Default neutral value
 
-        landmarks = results.multi_face_landmarks[0].landmark
-        h, w = frame.shape[:2]
+        face = faces[0]  # Use first detected face
 
-        left_ear = self._calculate_ear(landmarks, self.LEFT_EYE_INDICES, w, h)
-        right_ear = self._calculate_ear(landmarks, self.RIGHT_EYE_INDICES, w, h)
+        # Check if 106 landmarks are available
+        if self.has_106_landmarks and hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+            landmarks = face.landmark_2d_106.astype(int)
 
-        avg_ear = (left_ear + right_ear) / 2.0
-        return avg_ear
+            if len(landmarks) > max(LEFT_EYE_INDICES + RIGHT_EYE_INDICES):
+                left_eye_points = landmarks[LEFT_EYE_INDICES]
+                right_eye_points = landmarks[RIGHT_EYE_INDICES]
 
-    def _calculate_ear(self, landmarks, indices, w, h) -> float:
-        """Calculate Eye Aspect Ratio for a single eye."""
-        points = np.array([
-            [landmarks[i].x * w, landmarks[i].y * h]
-            for i in indices
-        ])
+                left_ear = self._calculate_ear(left_eye_points)
+                right_ear = self._calculate_ear(right_eye_points)
 
-        # Vertical distances
-        vertical_1 = np.linalg.norm(points[1] - points[5])
-        vertical_2 = np.linalg.norm(points[2] - points[4])
+                avg_ear = (left_ear + right_ear) / 2.0
+                return avg_ear
 
-        # Horizontal distance
-        horizontal = np.linalg.norm(points[0] - points[3])
+        # Fallback: use 5-point landmarks if available
+        if hasattr(face, 'kps') and face.kps is not None:
+            # Simple estimation from 5-point landmarks
+            # This is less accurate but better than nothing
+            return 0.3  # Default neutral value
 
-        if horizontal == 0:
-            return 0.3
-
-        ear = (vertical_1 + vertical_2) / (2.0 * horizontal)
-        return ear
+        return 0.3
 
     def extract_motion_magnitude(self, frame: np.ndarray) -> float:
         """
@@ -141,164 +413,42 @@ class FeatureExtractor:
 
     def extract_expression_activity(self, frame: np.ndarray) -> float:
         """
-        Calculate facial expression activity level.
+        Calculate facial expression activity level using InsightFace landmarks.
 
-        Combines multiple facial features to detect active expressions:
-        - Mouth openness (speaking, laughing)
-        - Eyebrow raise (surprise, emphasis)
-        - Jaw drop (speaking, yawning)
-        - Mouth stretch (smiling, wide expressions)
+        Uses Mouth Aspect Ratio (MAR) as the primary indicator.
 
         Returns:
-            float: Expression activity score. Lower is better for cut points.
-                   - < 0.1: Neutral expression (BEST)
-                   - 0.1-0.3: Slight expression
-                   - > 0.3: Active expression - speaking/emoting (AVOID)
+            float: Expression activity score (MAR value). Lower is better for cut points.
+                   - < 0.15: Neutral expression (BEST)
+                   - 0.15-0.30: Slight expression
+                   - > 0.30: Active expression - speaking/emoting (AVOID)
         """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_mesh.process(rgb_frame)
+        faces = self.app.get(rgb_frame)
 
-        if not results.multi_face_landmarks:
+        if not faces or len(faces) == 0:
             return 0.5  # High penalty if no face detected
 
-        landmarks = results.multi_face_landmarks[0].landmark
-        h, w = frame.shape[:2]
+        face = faces[0]
 
-        # Calculate individual expression components
-        mouth_aspect_ratio = self._calculate_mouth_aspect_ratio(landmarks, w, h)
-        eyebrow_raise = self._calculate_eyebrow_raise(landmarks, w, h)
-        jaw_openness = self._calculate_jaw_openness(landmarks, w, h)
-        mouth_stretch = self._calculate_mouth_stretch(landmarks, w, h)
+        # Check if 106 landmarks are available
+        if self.has_106_landmarks and hasattr(face, 'landmark_2d_106') and face.landmark_2d_106 is not None:
+            landmarks = face.landmark_2d_106.astype(int)
 
-        # Weighted combination - mouth is most important for detecting speech
-        activity = (
-            0.45 * mouth_aspect_ratio +   # Mouth vertical opening
-            0.25 * jaw_openness +          # Jaw drop
-            0.20 * eyebrow_raise +         # Eyebrow movement
-            0.10 * mouth_stretch           # Mouth horizontal stretch
-        )
+            if len(landmarks) > max(MOUTH_OUTER_INDICES):
+                mouth_points = landmarks[MOUTH_OUTER_INDICES]
+                mar = self._calculate_mar(mouth_points)
 
-        return activity
+                # Return raw MAR value - will be normalized in scorer.py
+                # Lower MAR = better for cut points (closed mouth)
+                return mar
 
-    def _calculate_mouth_aspect_ratio(self, landmarks, w, h) -> float:
-        """
-        Calculate Mouth Aspect Ratio (MAR) - vertical opening vs horizontal width.
-
-        Higher values indicate open mouth (speaking, surprise, etc).
-        """
-        # Vertical distance (top to bottom lip)
-        top_lip = np.array([landmarks[self.MOUTH_TOP].x * w,
-                           landmarks[self.MOUTH_TOP].y * h])
-        bottom_lip = np.array([landmarks[self.MOUTH_BOTTOM].x * w,
-                              landmarks[self.MOUTH_BOTTOM].y * h])
-        vertical_dist = np.linalg.norm(top_lip - bottom_lip)
-
-        # Horizontal distance (mouth width)
-        left_corner = np.array([landmarks[self.MOUTH_LEFT].x * w,
-                               landmarks[self.MOUTH_LEFT].y * h])
-        right_corner = np.array([landmarks[self.MOUTH_RIGHT].x * w,
-                                landmarks[self.MOUTH_RIGHT].y * h])
-        horizontal_dist = np.linalg.norm(left_corner - right_corner)
-
-        if horizontal_dist == 0:
-            return 0.0
-
-        # Normalize by mouth width
-        mar = vertical_dist / horizontal_dist
-
-        # Typical values: closed ~0.05-0.15, open ~0.3-0.6+
-        return mar
-
-    def _calculate_eyebrow_raise(self, landmarks, w, h) -> float:
-        """
-        Calculate eyebrow raise amount.
-
-        Higher values indicate raised eyebrows (surprise, emphasis while speaking).
-        """
-        # Distance from eyebrow to eye
-        left_brow_y = landmarks[self.LEFT_EYEBROW_TOP].y * h
-        left_eye_y = landmarks[self.LEFT_EYE_CENTER].y * h
-        right_brow_y = landmarks[self.RIGHT_EYEBROW_TOP].y * h
-        right_eye_y = landmarks[self.RIGHT_EYE_CENTER].y * h
-
-        # Face height for normalization
-        face_height = abs(landmarks[self.FOREHEAD].y - landmarks[self.CHIN].y) * h
-
-        if face_height == 0:
-            return 0.0
-
-        # Calculate normalized distances (y increases downward, so brow - eye)
-        left_raise = abs(left_brow_y - left_eye_y) / face_height
-        right_raise = abs(right_brow_y - right_eye_y) / face_height
-
-        avg_raise = (left_raise + right_raise) / 2.0
-
-        # Typical values: neutral ~0.05-0.08, raised ~0.1-0.15+
-        return float(avg_raise)
-
-    def _calculate_jaw_openness(self, landmarks, w, h) -> float:
-        """
-        Calculate jaw drop/openness.
-
-        Measures vertical distance from nose to chin, normalized by face height.
-        Increases when mouth opens wide.
-        """
-        nose = np.array([landmarks[self.NOSE_TIP].x * w,
-                        landmarks[self.NOSE_TIP].y * h])
-        chin = np.array([landmarks[self.CHIN].x * w,
-                        landmarks[self.CHIN].y * h])
-        forehead = np.array([landmarks[self.FOREHEAD].x * w,
-                            landmarks[self.FOREHEAD].y * h])
-
-        face_height = np.linalg.norm(forehead - chin)
-
-        if face_height == 0:
-            return 0.0
-
-        nose_to_chin = np.linalg.norm(nose - chin)
-        jaw_ratio = nose_to_chin / face_height
-
-        return jaw_ratio
-
-    def _calculate_mouth_stretch(self, landmarks, w, h) -> float:
-        """
-        Calculate horizontal mouth stretch (smiling, wide expressions).
-
-        Compares current mouth width to typical proportions.
-        """
-        left_corner = np.array([landmarks[self.MOUTH_LEFT].x * w,
-                               landmarks[self.MOUTH_LEFT].y * h])
-        right_corner = np.array([landmarks[self.MOUTH_RIGHT].x * w,
-                                landmarks[self.MOUTH_RIGHT].y * h])
-        mouth_width = np.linalg.norm(left_corner - right_corner)
-
-        # Face width for normalization
-        left_face = np.array([landmarks[234].x * w, landmarks[234].y * h])
-        right_face = np.array([landmarks[454].x * w, landmarks[454].y * h])
-        face_width = np.linalg.norm(left_face - right_face)
-
-        if face_width == 0:
-            return 0.0
-
-        # Ratio of mouth width to face width
-        stretch_ratio = mouth_width / face_width
-
-        # Typical neutral: ~0.35-0.45, wide smile: ~0.5+
-        # Return deviation from neutral (0.4)
-        deviation = abs(stretch_ratio - 0.4)
-
-        return float(deviation)
+        return 0.2  # Default low activity if can't analyze
 
     def extract_pose_deviation(self, frame: np.ndarray,
                               median_pose: Optional[Tuple[float, float, float]] = None) -> float:
         """
-        Calculate head pose deviation.
-
-        Measures pitch, yaw, and roll angles. Lower deviation = more stable/centered pose.
-
-        Args:
-            frame: Input frame
-            median_pose: Optional reference pose (pitch, yaw, roll) to compare against
+        Calculate head pose deviation using InsightFace landmarks.
 
         Returns:
             float: Pose deviation. Lower is better for cut points.
@@ -307,41 +457,31 @@ class FeatureExtractor:
                    - > 0.3: Significant pose change (AVOID)
         """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_mesh.process(rgb_frame)
+        faces = self.app.get(rgb_frame)
 
-        if not results.multi_face_landmarks:
+        if not faces or len(faces) == 0:
             return 0.5  # High penalty if no face
 
-        landmarks = results.multi_face_landmarks[0].landmark
+        face = faces[0]
 
-        # Extract 3D coordinates
-        nose_tip = np.array([landmarks[self.NOSE_TIP].x,
-                            landmarks[self.NOSE_TIP].y,
-                            landmarks[self.NOSE_TIP].z])
-        chin = np.array([landmarks[self.CHIN].x,
-                        landmarks[self.CHIN].y,
-                        landmarks[self.CHIN].z])
-        left_eye = np.array([landmarks[33].x, landmarks[33].y, landmarks[33].z])
-        right_eye = np.array([landmarks[263].x, landmarks[263].y, landmarks[263].z])
+        # Try to use pose estimation from face detection
+        # InsightFace provides bbox which we can use to estimate rough pose
+        if hasattr(face, 'bbox'):
+            bbox = face.bbox
+            # Simple heuristic: centered faces are better
+            # Assume frame center is ideal
+            frame_h, frame_w = frame.shape[:2]
+            face_center_x = (bbox[0] + bbox[2]) / 2
+            face_center_y = (bbox[1] + bbox[3]) / 2
 
-        # Calculate pose angles
-        pitch = np.arctan2(nose_tip[1] - chin[1], nose_tip[2] - chin[2])
-        yaw = np.arctan2(left_eye[0] - right_eye[0], left_eye[2] - right_eye[2])
-        roll = np.arctan2(left_eye[1] - right_eye[1], left_eye[0] - right_eye[0])
+            # Normalized deviation from center
+            center_x_dev = abs(face_center_x - frame_w/2) / (frame_w/2)
+            center_y_dev = abs(face_center_y - frame_h/2) / (frame_h/2)
 
-        if median_pose is None:
-            # Return absolute pose deviation
-            deviation = np.sqrt(pitch**2 + yaw**2 + roll**2)
-        else:
-            # Return deviation from median pose
-            median_pitch, median_yaw, median_roll = median_pose
-            deviation = np.sqrt(
-                (pitch - median_pitch)**2 +
-                (yaw - median_yaw)**2 +
-                (roll - median_roll)**2
-            )
+            deviation = (center_x_dev + center_y_dev) / 2.0
+            return float(deviation)
 
-        return float(deviation)
+        return 0.3  # Default moderate deviation
 
     def extract_visual_sharpness(self, frame: np.ndarray) -> float:
         """

@@ -25,11 +25,14 @@ class FrameScorer:
         if not features:
             return []
 
+        # Stage 1: Normalize metrics
+        # Eye openness: Use Gaussian normalization to favor normal/median values
+        # (not too wide, not blinking)
         eye_openness_scores = MetricNormalizer.normalize_gaussian(
             [f.eye_openness for f in features],
-            target=0.32,
-            sigma=0.05,
-            inverse=False
+            target=None,   # Use median as target
+            sigma=None,    # Use data std
+            inverse=False  # Peak at median (normal eye openness) gets score 1.0
         )
 
         motion_stability_scores = MetricNormalizer.normalize(
@@ -82,14 +85,14 @@ class FrameScorer:
                 final_score=0.0  # Will be calculated after context window
             ))
 
+        # Stage 4: Apply context window
         context_scores = self._apply_context_window(frame_scores)
 
-        for i, (score, context) in enumerate(zip(frame_scores, context_scores)):
+        # Stage 5: Calculate final scores using context-aware scores
+        for score, context in zip(frame_scores, context_scores):
             score.context_score = context
+            # Use context score (temporal smoothing) instead of raw composite
             score.final_score = context * score.quality_penalty * score.stability_boost
-
-            recency_factor = 1.0 + (i / len(frame_scores)) * 0.05
-            score.final_score *= recency_factor
 
         return frame_scores
 

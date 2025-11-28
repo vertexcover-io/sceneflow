@@ -32,8 +32,10 @@ class CutPointRanker:
         sample_rate: int = 1,
         save_frames: bool = False,
         save_video: bool = False,
-        save_logs: bool = False
-    ) -> List[RankedFrame]:
+        output_path: Optional[str] = None,
+        save_logs: bool = False,
+        return_internals: bool = False
+    ):
         """
         Rank frames in the given time range for optimal cut points.
         Uses multi-stage ranking with temporal diversity filtering.
@@ -45,14 +47,19 @@ class CutPointRanker:
             sample_rate: Process every Nth frame (1 = all frames)
             save_frames: If True, save frames with bounding boxes showing tracked features
             save_video: If True, cut video from start to best timestamp and save as <filename>_cut.mp4
+            output_path: Optional custom path for saved video. If None, uses output/<filename>_cut.mp4
             save_logs: If True, save detailed analysis data to JSONL files for each frame
+            return_internals: If True, return tuple of (ranked_frames, features, scores) to avoid re-processing
 
         Returns:
-            List of RankedFrame sorted by score (best first) with temporal diversity
+            If return_internals=False: List of RankedFrame sorted by score (best first)
+            If return_internals=True: Tuple of (List[RankedFrame], List[FrameFeatures], List[FrameScore])
         """
         features = self._extract_features(video_path, start_time, end_time, sample_rate)
 
         if not features:
+            if return_internals:
+                return [], [], []
             return []
 
         scores = self.scorer.compute_scores(features)
@@ -76,8 +83,10 @@ class CutPointRanker:
             self._save_frame_logs(video_path, ranked_frames, features, scores)
 
         if save_video and ranked_frames:
-            self._save_cut_video(video_path, ranked_frames[0].timestamp)
+            self._save_cut_video(video_path, ranked_frames[0].timestamp, output_path=output_path)
 
+        if return_internals:
+            return ranked_frames, features, scores
         return ranked_frames
 
     def get_detailed_scores(
@@ -358,22 +367,33 @@ class CutPointRanker:
 
         return frame
 
-    def _save_cut_video(self, video_path: str, cut_timestamp: float) -> None:
+    def _save_cut_video(self, video_path: str, cut_timestamp: float, output_path: Optional[str] = None) -> str:
         """
         Cut video from start to the specified timestamp and save it.
 
         Args:
             video_path: Path to input video file
             cut_timestamp: Timestamp where to cut the video (in seconds)
+            output_path: Optional custom output path for the cut video.
+                        If None, saves to output/<video_name>_cut.mp4
+
+        Returns:
+            Path to the saved cut video
         """
         import subprocess
 
-        video_base_name = Path(video_path).stem
-        output_dir = Path("output")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        output_filename = f"{video_base_name}_cut.mp4"
-        output_path = output_dir / output_filename
+        if output_path:
+            # Use custom output path
+            final_output_path = Path(output_path)
+            # Create parent directory if it doesn't exist
+            final_output_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            # Default behavior: save to output directory
+            video_base_name = Path(video_path).stem
+            output_dir = Path("output")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_filename = f"{video_base_name}_cut.mp4"
+            final_output_path = output_dir / output_filename
 
         # Use ffmpeg to cut the video from start to cut_timestamp
         # Re-encode for frame-accurate cutting (slower but accurate)
@@ -384,13 +404,16 @@ class CutPointRanker:
             '-c:v', 'libx264',  # Re-encode video for frame accuracy
             '-c:a', 'aac',      # Re-encode audio
             '-y',  # Overwrite output file if exists
-            str(output_path)
+            str(final_output_path)
         ]
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print(f"Saved cut video (0.00s - {cut_timestamp:.2f}s) to: {output_path}")
+            print(f"Saved cut video (0.00s - {cut_timestamp:.2f}s) to: {final_output_path}")
+            return str(final_output_path)
         except subprocess.CalledProcessError as e:
             print(f"Error cutting video: {e.stderr}")
+            raise
         except FileNotFoundError:
             print("Error: ffmpeg not found. Please install ffmpeg to use the save_video feature.")
+            raise

@@ -16,13 +16,13 @@ logging.basicConfig(
 
 
 def main():
-    video_path = "D:/vertexcover/ai-video-cutter/dataset/AI/001_explainer.mp4"
+    video_path = "new_dataset/scene4.mp4"
 
     print("SceneFlow - Basic Usage Example")
     print("=" * 60)
     print(f"Finding best cut point in: {video_path}")
     print()
-    best_time = get_cut_frame(video_path, save_frames=True, save_video=True, save_logs=True)
+    best_time = get_cut_frame(video_path, save_frames=True, save_logs=True,save_video=True,use_energy_refinement=True, use_llm_selection=True)
     print()
     print("=" * 60)
     print(f"✓ Best cut point: {best_time:.2f} seconds")

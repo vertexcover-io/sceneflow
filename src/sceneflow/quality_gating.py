@@ -1,18 +1,10 @@
-"""Quality gating for filtering low-quality frames."""
-
 import numpy as np
 from typing import List
 from .models import FrameFeatures
 
 
 class QualityGate:
-    """Applies quality-based penalties to frame scores."""
-
     def __init__(self, percentile_threshold: float = 75.0):
-        """
-        Args:
-            percentile_threshold: Percentile threshold for quality gating (0-100)
-        """
         self.percentile_threshold = percentile_threshold
 
     def calculate_penalties(self, features: List[FrameFeatures]) -> List[float]:

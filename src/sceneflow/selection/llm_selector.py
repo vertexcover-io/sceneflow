@@ -1,12 +1,20 @@
 import os
 import base64
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 import cv2
 import numpy as np
 from openai import OpenAI
 
-from .models import RankedFrame, FrameScore, FrameFeatures
+from sceneflow.shared.models import (
+    RankedFrame,
+    FrameScore,
+    FrameFeatures,
+    FrameMetadata,
+    TemporalContext,
+    NormalizedScores,
+    RawMeasurements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,40 +86,40 @@ class LLMFrameSelector:
         features: FrameFeatures,
         speech_end_time: float,
         video_duration: float
-    ) -> Dict[str, Any]:
+    ) -> FrameMetadata:
         time_since_speech = frame.timestamp - speech_end_time
         time_until_end = video_duration - frame.timestamp
         percentage_through = (frame.timestamp / video_duration) * 100
 
-        return {
-            "timestamp": round(frame.timestamp, 2),
-            "overall_score": round(frame.score, 4),
-            "scores": {
-                "eye_openness": round(score.eye_openness_score, 3),
-                "motion_stability": round(score.motion_stability_score, 3),
-                "expression_neutrality": round(score.expression_neutrality_score, 3),
-                "pose_stability": round(score.pose_stability_score, 3),
-                "visual_sharpness": round(score.visual_sharpness_score, 3)
-            },
-            "raw_measurements": {
-                "eye_aspect_ratio": round(features.eye_openness, 3),
-                "motion_magnitude": round(features.motion_magnitude, 2),
-                "mouth_aspect_ratio": round(features.expression_activity, 3),
-                "head_pose_deviation": round(features.pose_deviation, 2),
-                "sharpness_variance": round(features.sharpness, 2)
-            },
-            "temporal_context": {
-                "time_since_speech_end": round(time_since_speech, 2),
-                "time_until_video_end": round(time_until_end, 2),
-                "percentage_through_video": round(percentage_through, 1)
-            }
-        }
+        return FrameMetadata(
+            timestamp=round(frame.timestamp, 2),
+            overall_score=round(frame.score, 4),
+            scores=NormalizedScores(
+                eye_openness=round(score.eye_openness_score, 3),
+                motion_stability=round(score.motion_stability_score, 3),
+                expression_neutrality=round(score.expression_neutrality_score, 3),
+                pose_stability=round(score.pose_stability_score, 3),
+                visual_sharpness=round(score.visual_sharpness_score, 3)
+            ),
+            raw_measurements=RawMeasurements(
+                eye_aspect_ratio=round(features.eye_openness, 3),
+                motion_magnitude=round(features.motion_magnitude, 2),
+                mouth_aspect_ratio=round(features.expression_activity, 3),
+                head_pose_deviation=round(features.pose_deviation, 2),
+                sharpness_variance=round(features.sharpness, 2)
+            ),
+            temporal_context=TemporalContext(
+                time_since_speech_end=round(time_since_speech, 2),
+                time_until_video_end=round(time_until_end, 2),
+                percentage_through_video=round(percentage_through, 1)
+            )
+        )
 
-    def _build_prompt(self, frames_data: List[Dict[str, Any]]) -> str:
+    def _build_prompt(self, frames_data: List[dict]) -> str:
         prompt_parts = [
             "You are analyzing AI-generated talking head video frames to select the best cut point.",
-            f"The video is {frames_data[0]['metadata']['temporal_context']['time_until_video_end'] + frames_data[0]['metadata']['timestamp']:.1f}s long.",
-            f"Speech ended at {frames_data[0]['metadata']['timestamp'] - frames_data[0]['metadata']['temporal_context']['time_since_speech_end']:.1f}s.",
+            f"The video is {frames_data[0]['metadata'].temporal_context.time_until_video_end + frames_data[0]['metadata'].timestamp:.1f}s long.",
+            f"Speech ended at {frames_data[0]['metadata'].timestamp - frames_data[0]['metadata'].temporal_context.time_since_speech_end:.1f}s.",
             "",
             "Below are 5 frames ranked by an algorithm analyzing facial features and stability.",
             "",
@@ -129,19 +137,19 @@ class LLMFrameSelector:
         for data in frames_data:
             meta = data["metadata"]
             prompt_parts.extend([
-                f"[Frame {data['index']} - {meta['timestamp']}s - Score: {meta['overall_score']}]",
-                f"- Eye openness: {meta['scores']['eye_openness']} (EAR: {meta['raw_measurements']['eye_aspect_ratio']})",
-                f"- Motion stability: {meta['scores']['motion_stability']} ({meta['raw_measurements']['motion_magnitude']}px movement)",
-                f"- Expression neutrality: {meta['scores']['expression_neutrality']} (MAR: {meta['raw_measurements']['mouth_aspect_ratio']})",
-                f"- Pose stability: {meta['scores']['pose_stability']} ({meta['raw_measurements']['head_pose_deviation']}px deviation)",
-                f"- Visual sharpness: {meta['scores']['visual_sharpness']}",
-                f"- Padding: {meta['temporal_context']['time_since_speech_end']}s after speech, {meta['temporal_context']['time_until_video_end']}s before end ({meta['temporal_context']['percentage_through_video']}% through video)",
+                f"[Frame {data['index']} - {meta.timestamp}s - Score: {meta.overall_score}]",
+                f"- Eye openness: {meta.scores.eye_openness} (EAR: {meta.raw_measurements.eye_aspect_ratio})",
+                f"- Motion stability: {meta.scores.motion_stability} ({meta.raw_measurements.motion_magnitude}px movement)",
+                f"- Expression neutrality: {meta.scores.expression_neutrality} (MAR: {meta.raw_measurements.mouth_aspect_ratio})",
+                f"- Pose stability: {meta.scores.pose_stability} ({meta.raw_measurements.head_pose_deviation}px deviation)",
+                f"- Visual sharpness: {meta.scores.visual_sharpness}",
+                f"- Padding: {meta.temporal_context.time_since_speech_end}s after speech, {meta.temporal_context.time_until_video_end}s before end ({meta.temporal_context.percentage_through_video}% through video)",
                 ""
             ])
 
         return "\n".join(prompt_parts)
 
-    def _call_openai_vision(self, frames_data: List[Dict[str, Any]]) -> int:
+    def _call_openai_vision(self, frames_data: List[dict]) -> int:
         prompt = self._build_prompt(frames_data)
 
         messages = [

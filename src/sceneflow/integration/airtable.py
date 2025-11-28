@@ -15,7 +15,7 @@ try:
 except ImportError:
     PYAIRTABLE_AVAILABLE = False
 
-from .models import RankedFrame, FrameScore, FrameFeatures
+from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
 
 logger = logging.getLogger(__name__)
 

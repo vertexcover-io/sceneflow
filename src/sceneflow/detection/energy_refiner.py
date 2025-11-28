@@ -8,6 +8,8 @@ import librosa
 import numpy as np
 import logging
 
+from sceneflow.shared.models import EnergyRefinementResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +36,7 @@ class EnergyRefiner:
 
     def refine_speech_end(
         self, vad_timestamp: float, video_path: str
-    ) -> tuple[float, dict]:
+    ) -> EnergyRefinementResult:
         """
         Refine VAD timestamp by finding actual speech end via energy drop.
 
@@ -43,8 +45,7 @@ class EnergyRefiner:
             video_path: Path to video file
 
         Returns:
-            Tuple of (refined_timestamp, metadata_dict)
-            metadata contains: vad_frame, refined_frame, energy_drop_db, energy_levels
+            EnergyRefinementResult dataclass with refined timestamp and metadata
         """
         # Get video properties
         cap = cv2.VideoCapture(video_path)
@@ -81,15 +82,15 @@ class EnergyRefiner:
                 refined_frame, 0
             )
 
-        metadata = {
-            "vad_frame": vad_frame,
-            "vad_timestamp": vad_timestamp,
-            "refined_frame": refined_frame,
-            "refined_timestamp": refined_timestamp,
-            "energy_drop_db": energy_drop,
-            "frames_adjusted": vad_frame - refined_frame,
-            "energy_levels": energy_levels,
-        }
+        result = EnergyRefinementResult(
+            refined_timestamp=refined_timestamp,
+            vad_frame=vad_frame,
+            vad_timestamp=vad_timestamp,
+            refined_frame=refined_frame,
+            energy_drop_db=energy_drop,
+            frames_adjusted=vad_frame - refined_frame,
+            energy_levels=energy_levels
+        )
 
         logger.info(f"VAD timestamp: {vad_timestamp:.3f}s (frame {vad_frame})")
         if refined_frame != vad_frame:
@@ -101,7 +102,7 @@ class EnergyRefiner:
         else:
             logger.info("No refinement needed - using original VAD timestamp")
 
-        return refined_timestamp, metadata
+        return result
 
     def _extract_energy_levels(
         self, y: np.ndarray, sr: int, fps: float, start_frame: int, end_frame: int

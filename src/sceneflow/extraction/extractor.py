@@ -1,29 +1,20 @@
 """Main feature extraction module for video frame analysis.
 
-This module provides the FeatureExtractor class which handles extraction
-of facial features (eye openness, mouth activity, pose) and visual features
-(motion, sharpness) from video frames using InsightFace and OpenCV.
-
-The extractor supports both single-face and multi-face scenarios with
-center-weighted aggregation for multi-face frames.
+Extracts for podcast/talking head videos:
+- Eye openness (EAR) - detect blinks
+- Mouth openness (MAR) - detect mid-sentence
+- Sharpness - detect motion blur
+- Face center - for consistency check
 
 Example:
     >>> from sceneflow.extraction.extractor import FeatureExtractor
     >>> extractor = FeatureExtractor()
-    >>> num_faces, face_list, metrics = extractor.extract_all_faces(frame)
-    >>> print(f"Detected {num_faces} faces")
-
-Classes:
-    FeatureExtractor: Main feature extraction class
-
-Constants:
-    LEFT_EYE_INDICES: Landmark indices for left eye (7 points)
-    RIGHT_EYE_INDICES: Landmark indices for right eye (7 points)
-    MOUTH_OUTER_INDICES: Landmark indices for outer mouth (20 points)
+    >>> metrics = extractor.extract_face_metrics(frame)
 """
 
 import logging
-from typing import List, Tuple
+from dataclasses import dataclass
+from typing import Tuple, Optional
 
 import cv2
 import numpy as np
@@ -37,315 +28,168 @@ except ImportError as e:
 
 from sceneflow.shared.constants import INSIGHTFACE, EAR, MAR
 from sceneflow.shared.exceptions import InsightFaceError
-from sceneflow.shared.models import AggregatedFaceMetrics
-from sceneflow.extraction.face_metrics import (
-    calculate_ear,
-    calculate_mar,
-    calculate_center_distance,
-    calculate_center_weight,
-    aggregate_multi_face_metrics,
-)
-from sceneflow.extraction.frame_metrics import (
-    MotionTracker,
-    calculate_visual_sharpness,
-)
+from sceneflow.extraction.face_metrics import calculate_ear, calculate_mar
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class FaceMetrics:
+    """Metrics extracted from a face."""
+    ear: float           # Eye aspect ratio
+    mar: float           # Mouth aspect ratio
+    sharpness: float     # Face region sharpness
+    center: Tuple[float, float]  # Face center position
+    detected: bool       # Whether face was found
+
+
 # Landmark indices for 106-point model
-LEFT_EYE_INDICES = list(range(
-    INSIGHTFACE.LEFT_EYE_START,
-    INSIGHTFACE.LEFT_EYE_END
-))
-RIGHT_EYE_INDICES = list(range(
-    INSIGHTFACE.RIGHT_EYE_START,
-    INSIGHTFACE.RIGHT_EYE_END
-))
-MOUTH_OUTER_INDICES = list(range(
-    INSIGHTFACE.MOUTH_OUTER_START,
-    INSIGHTFACE.MOUTH_OUTER_END
-))
+LEFT_EYE_INDICES = list(range(INSIGHTFACE.LEFT_EYE_START, INSIGHTFACE.LEFT_EYE_END))
+RIGHT_EYE_INDICES = list(range(INSIGHTFACE.RIGHT_EYE_START, INSIGHTFACE.RIGHT_EYE_END))
+MOUTH_OUTER_INDICES = list(range(INSIGHTFACE.MOUTH_OUTER_START, INSIGHTFACE.MOUTH_OUTER_END))
 
 
 class FeatureExtractor:
     """
-    Extracts facial and visual features for determining optimal video cut points.
-
-    Uses InsightFace with 106-landmark detection for detailed facial analysis.
-
-    Key principles:
-    - Normal eye openness = better (not blinking, not wide open)
-    - Lower motion = better (stable frame)
-    - Lower expression activity = better (neutral face)
-    - Stable pose = better (facing camera directly)
-    - Higher sharpness = better (clear image)
-
-    Multi-face support:
-    - Detects all faces in frame
-    - Uses center-weighted averaging for final metrics
-    - Closer faces to center have higher influence
-
-    Attributes:
-        has_106_landmarks: Whether 106-landmark model is loaded
-        app: InsightFace FaceAnalysis instance
-        motion_tracker: MotionTracker for optical flow
-        center_weighting_strength: Controls center distance weighting
-        min_face_confidence: Minimum confidence for face detection
+    Extracts facial features for podcast/talking head cut point detection.
+    
+    Extracts:
+    - Eye Aspect Ratio (EAR) - detect blinks
+    - Mouth Aspect Ratio (MAR) - detect talking
+    - Sharpness - detect motion blur
+    - Face center - for consistency check
     """
 
-    def __init__(
-        self,
-        center_weighting_strength: float = INSIGHTFACE.DEFAULT_CENTER_WEIGHTING_STRENGTH,
-        min_face_confidence: float = INSIGHTFACE.MIN_FACE_CONFIDENCE
-    ):
+    def __init__(self, min_face_confidence: float = INSIGHTFACE.MIN_FACE_CONFIDENCE):
         """
         Initialize InsightFace with 106-landmark detection.
 
         Args:
-            center_weighting_strength: Controls how strongly center distance
-                affects weighting (higher = stronger center bias)
-            min_face_confidence: Minimum confidence threshold for face detection (0-1)
+            min_face_confidence: Minimum confidence threshold for face detection
 
         Raises:
-            InsightFaceError: If InsightFace fails to initialize
+            InsightFaceError: If 106-landmark model fails to load
         """
-        self.center_weighting_strength = center_weighting_strength
         self.min_face_confidence = min_face_confidence
 
         logger.info("Initializing InsightFace with 106-landmark detection...")
 
         try:
-            # Try to load with 106-landmark model
             self.app = FaceAnalysis(
                 allowed_modules=['detection', 'landmark_2d_106'],
                 providers=['CPUExecutionProvider']
             )
             self.app.prepare(ctx_id=-1, det_size=INSIGHTFACE.DEFAULT_DET_SIZE)
-            self.has_106_landmarks = True
             logger.info("Successfully loaded InsightFace 106-landmark model")
         except Exception as e:
-            logger.warning(
-                "Could not load 106-landmark model (%s), "
-                "falling back to 5-point detection",
-                e
-            )
-            try:
-                self.app = FaceAnalysis(providers=['CPUExecutionProvider'])
-                self.app.prepare(ctx_id=-1, det_size=INSIGHTFACE.DEFAULT_DET_SIZE)
-                self.has_106_landmarks = False
-                logger.info("Loaded InsightFace with 5-point landmarks")
-            except Exception as fallback_error:
-                raise InsightFaceError(
-                    f"Failed to initialize InsightFace: {fallback_error}"
-                ) from fallback_error
+            raise InsightFaceError(
+                f"Failed to load 106-landmark model (required for EAR/MAR): {e}"
+            ) from e
 
-        # Motion tracking
-        self.motion_tracker = MotionTracker()
-
-    def extract_all_faces(
-        self,
-        frame: np.ndarray
-    ) -> Tuple[int, List, AggregatedFaceMetrics]:
+    def extract_face_metrics(self, frame: np.ndarray) -> FaceMetrics:
         """
-        Extract features from all detected faces in the frame.
+        Extract all face metrics from the primary face in frame.
 
         Args:
             frame: Input frame (BGR format from OpenCV)
 
         Returns:
-            Tuple containing:
-            - num_faces: Number of faces detected
-            - face_features_list: List of FaceFeatures objects (from models.py)
-            - aggregated_metrics: AggregatedFaceMetrics dataclass with metrics
-              aggregated across all faces
-
-        Note:
-            If no faces detected, returns (0, [], default_penalty_values)
+            FaceMetrics with EAR, MAR, sharpness, center, and detection status
         """
-        from sceneflow.shared.models import FaceFeatures
-
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         faces = self.app.get(rgb_frame)
-        frame_shape = frame.shape[:2]  # (height, width)
 
-        # Filter faces by confidence
+        # Filter by confidence
         if faces:
-            faces_before = len(faces)
             faces = [
                 f for f in faces
                 if hasattr(f, 'det_score') and f.det_score >= self.min_face_confidence
             ]
-            if len(faces) < faces_before:
-                logger.debug(
-                    "Filtered %d faces below confidence threshold %.2f",
-                    faces_before - len(faces),
-                    self.min_face_confidence
-                )
 
         if not faces:
             logger.debug("No faces detected in frame")
-            return 0, [], AggregatedFaceMetrics(
-                eye_openness=EAR.DEFAULT,
-                expression_activity=MAR.DEFAULT,
-                pose_deviation=0.5
+            return FaceMetrics(
+                ear=EAR.DEFAULT,
+                mar=MAR.DEFAULT,
+                sharpness=0.0,
+                center=(0.0, 0.0),
+                detected=False
             )
 
-        face_features_list: List[FaceFeatures] = []
-        face_metrics: List[Tuple[float, float, float]] = []
-        weights: List[float] = []
+        # Use the largest face (primary subject in talking head videos)
+        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
-        for face_idx, face in enumerate(faces):
-            # Calculate center distance and weight
-            bbox = face.bbox
-            center_distance = calculate_center_distance(bbox, frame_shape)
-            center_weight = calculate_center_weight(
-                center_distance,
-                self.center_weighting_strength
-            )
+        # Extract metrics
+        ear = self._extract_ear(face)
+        mar = self._extract_mar(face)
+        sharpness = self._calculate_sharpness(frame, face.bbox)
+        center = self._get_face_center(face.bbox)
 
-            # Extract per-face metrics
-            eye_openness = self._extract_single_face_eye_openness(face)
-            expression_activity = self._extract_single_face_expression(face)
-            pose_deviation = self._extract_single_face_pose(face, bbox, frame_shape)
-
-            # Store per-face data
-            face_features_list.append(FaceFeatures(
-                face_index=face_idx,
-                bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),
-                center_distance=center_distance,
-                center_weight=center_weight,
-                eye_openness=eye_openness,
-                expression_activity=expression_activity,
-                pose_deviation=pose_deviation
-            ))
-
-            face_metrics.append((eye_openness, expression_activity, pose_deviation))
-            weights.append(center_weight)
-
-        # Aggregate metrics using center-weighted averaging
-        aggregated = aggregate_multi_face_metrics(face_metrics, weights)
-
-        logger.debug(
-            "Extracted features from %d faces (aggregated: EAR=%.3f, MAR=%.3f, pose=%.3f)",
-            len(faces), aggregated.eye_openness, aggregated.expression_activity, aggregated.pose_deviation
+        logger.debug("Extracted: EAR=%.3f, MAR=%.3f, sharpness=%.1f", ear, mar, sharpness)
+        return FaceMetrics(
+            ear=ear,
+            mar=mar,
+            sharpness=sharpness,
+            center=center,
+            detected=True
         )
 
-        return len(faces), face_features_list, aggregated
-
-    def _extract_single_face_eye_openness(self, face) -> float:
+    def _calculate_sharpness(self, frame: np.ndarray, bbox: np.ndarray) -> float:
         """
-        Extract eye openness for a single face object.
-
-        Args:
-            face: InsightFace face detection result
-
-        Returns:
-            Average EAR across both eyes, or default value if unavailable
+        Calculate sharpness of the face region using Laplacian variance.
+        Higher value = sharper image, lower = blurry/motion blur.
         """
-        # Check if 106 landmarks are available
-        if (self.has_106_landmarks and
-            hasattr(face, 'landmark_2d_106') and
-            face.landmark_2d_106 is not None):
+        x1, y1, x2, y2 = map(int, bbox)
+        
+        # Add some padding
+        h, w = frame.shape[:2]
+        pad = 10
+        x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+        x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
+        
+        face_region = frame[y1:y2, x1:x2]
+        if face_region.size == 0:
+            return 0.0
+        
+        # Convert to grayscale and compute Laplacian variance
+        gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        variance = laplacian.var()
+        
+        return float(variance)
 
-            landmarks = face.landmark_2d_106.astype(int)
+    def _get_face_center(self, bbox: np.ndarray) -> Tuple[float, float]:
+        """Get the center point of the face bounding box."""
+        x1, y1, x2, y2 = bbox
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
 
-            if len(landmarks) > max(LEFT_EYE_INDICES + RIGHT_EYE_INDICES):
-                left_eye_points = landmarks[LEFT_EYE_INDICES]
-                right_eye_points = landmarks[RIGHT_EYE_INDICES]
+    def _extract_ear(self, face) -> float:
+        """Extract Eye Aspect Ratio from face landmarks."""
+        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+            return EAR.DEFAULT
 
-                left_ear = calculate_ear(left_eye_points)
-                right_ear = calculate_ear(right_eye_points)
+        landmarks = face.landmark_2d_106.astype(int)
 
-                avg_ear = (left_ear + right_ear) / 2.0
-                return avg_ear
+        if len(landmarks) <= max(LEFT_EYE_INDICES + RIGHT_EYE_INDICES):
+            return EAR.DEFAULT
 
-        logger.debug("106 landmarks not available for eye openness")
-        return EAR.DEFAULT
+        left_eye = landmarks[LEFT_EYE_INDICES]
+        right_eye = landmarks[RIGHT_EYE_INDICES]
 
-    def _extract_single_face_expression(self, face) -> float:
-        """
-        Extract expression activity for a single face object.
+        left_ear = calculate_ear(left_eye)
+        right_ear = calculate_ear(right_eye)
 
-        Args:
-            face: InsightFace face detection result
+        return (left_ear + right_ear) / 2.0
 
-        Returns:
-            MAR value representing expression activity
-        """
-        # Check if 106 landmarks are available
-        if (self.has_106_landmarks and
-            hasattr(face, 'landmark_2d_106') and
-            face.landmark_2d_106 is not None):
+    def _extract_mar(self, face) -> float:
+        """Extract Mouth Aspect Ratio from face landmarks."""
+        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+            return MAR.DEFAULT
 
-            landmarks = face.landmark_2d_106.astype(int)
+        landmarks = face.landmark_2d_106.astype(int)
 
-            if len(landmarks) > max(MOUTH_OUTER_INDICES):
-                mouth_points = landmarks[MOUTH_OUTER_INDICES]
-                mar = calculate_mar(mouth_points)
-                return mar
+        if len(landmarks) <= max(MOUTH_OUTER_INDICES):
+            return MAR.DEFAULT
 
-        logger.debug("106 landmarks not available for expression activity")
-        return MAR.DEFAULT
-
-    def _extract_single_face_pose(
-        self,
-        face,
-        bbox: np.ndarray,
-        frame_shape: Tuple[int, int]
-    ) -> float:
-        """
-        Extract pose deviation for a single face object.
-
-        Args:
-            face: InsightFace face detection result
-            bbox: Face bounding box
-            frame_shape: Frame dimensions (height, width)
-
-        Returns:
-            Pose deviation from center (0-1, lower is better)
-        """
-        frame_h, frame_w = frame_shape
-        face_center_x = (bbox[0] + bbox[2]) / 2
-        face_center_y = (bbox[1] + bbox[3]) / 2
-
-        # Normalized deviation from center
-        center_x_dev = abs(face_center_x - frame_w/2) / (frame_w/2)
-        center_y_dev = abs(face_center_y - frame_h/2) / (frame_h/2)
-
-        deviation = (center_x_dev + center_y_dev) / 2.0
-        return float(deviation)
-
-    def extract_motion_magnitude(self, frame: np.ndarray) -> float:
-        """
-        Calculate optical flow magnitude between current and previous frame.
-
-        Args:
-            frame: Current frame (BGR format)
-
-        Returns:
-            Median motion magnitude in pixels
-        """
-        return self.motion_tracker.calculate_motion_magnitude(frame)
-
-    def extract_visual_sharpness(self, frame: np.ndarray) -> float:
-        """
-        Calculate image sharpness using Laplacian variance.
-
-        Args:
-            frame: Input frame (BGR format)
-
-        Returns:
-            Sharpness score
-        """
-        return calculate_visual_sharpness(frame)
-
-    def reset(self) -> None:
-        """
-        Reset internal state (optical flow tracking).
-
-        Call this when starting to process a new video or time range
-        to ensure optical flow starts fresh.
-        """
-        self.motion_tracker.reset()
-        logger.debug("Feature extractor state reset")
+        mouth = landmarks[MOUTH_OUTER_INDICES]
+        return calculate_mar(mouth)

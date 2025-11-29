@@ -1,213 +1,223 @@
-"""Frame scoring module for cut point ranking.
-
-This module provides the FrameScorer class which implements the multi-stage
-scoring pipeline for ranking video frames based on multiple quality factors.
-"""
+"""Frame scoring for podcast/talking head cut point detection."""
 
 import logging
-from typing import List
-
-import numpy as np
+import math
+from typing import List, Dict
 
 from sceneflow.shared.config import RankingConfig
+from sceneflow.shared.constants import EAR, MAR
 from sceneflow.shared.models import FrameFeatures, FrameScore
-from sceneflow.core.normalizer import MetricNormalizer
-from sceneflow.core.quality_gating import QualityGate
-from sceneflow.core.stability_analyzer import StabilityAnalyzer
 
 logger = logging.getLogger(__name__)
 
 
 class FrameScorer:
     """
-    Computes multi-factor scores for video frames.
-
-    Implements a 5-stage scoring pipeline:
-    1. Normalize all metrics across frames (eye openness, motion, expression, pose, sharpness)
-    2. Calculate quality penalties based on sharpness percentiles
-    3. Calculate stability boosts based on local temporal variance
-    4. Compute weighted composite scores from normalized metrics
-    5. Apply temporal context window (sliding average)
-    6. Final score = context_score × quality_penalty × stability_boost
-
-    Attributes:
-        config: RankingConfig with scoring weights and parameters
-        quality_gate: QualityGate for calculating quality penalties
-        stability_analyzer: StabilityAnalyzer for temporal stability boosts
-
-    Example:
-        >>> from sceneflow.shared.config import RankingConfig
-        >>> config = RankingConfig()
-        >>> scorer = FrameScorer(config)
-        >>> scores = scorer.compute_scores(features)
-        >>> best_score = max(scores, key=lambda s: s.final_score)
+    Scorer for podcast/talking head videos.
+    
+    Scoring logic:
+    - Eye score: Penalize blinks (low EAR) and wide eyes (high EAR)
+    - Mouth score: Penalize open mouth (high MAR)
+    - Sharpness score: Penalize blurry/motion blur frames
+    - Consistency score: Penalize frames with sudden face movement
     """
 
     def __init__(self, config: RankingConfig):
-        """
-        Initialize the scorer with configuration.
-
-        Args:
-            config: RankingConfig instance with weights and parameters
-        """
         self.config = config
-        self.quality_gate = QualityGate(config.quality_gate_percentile)
-        self.stability_analyzer = StabilityAnalyzer(config.local_stability_window)
-
-        logger.debug(
-            "Initialized FrameScorer: quality_gate=%.1f%%, stability_window=%d, context_window=%d",
-            config.quality_gate_percentile,
-            config.local_stability_window,
-            config.context_window_size
-        )
 
     def compute_scores(self, features: List[FrameFeatures]) -> List[FrameScore]:
         """
-        Compute scores for all frames using multi-stage pipeline.
-
-        Pipeline stages:
-        1. Normalize all metrics across all frames
-        2. Calculate quality penalties and stability boosts
-        3. Compute weighted composite scores
-        4. Apply multi-frame context window (temporal smoothing)
-        5. Calculate final scores: context × quality_penalty × stability_boost
-
+        Compute scores for all frames.
+        
         Args:
-            features: List of extracted FrameFeatures
-
+            features: List of FrameFeatures with all extracted metrics
+            
         Returns:
-            List of FrameScore with computed scores for each frame
-
-        Note:
-            Empty input returns empty list
+            List of FrameScore
         """
         if not features:
-            logger.warning("No features provided to scorer")
             return []
 
-        logger.info("Computing scores for %d frames", len(features))
+        # Pre-compute consistency scores (needs neighbor info)
+        consistency_scores = self._compute_consistency_scores(features)
+        
+        # Normalize sharpness scores
+        sharpness_scores = self._compute_sharpness_scores(features)
 
-        # Stage 1: Normalize metrics
-        logger.debug("Stage 1: Normalizing metrics")
-
-        # Eye openness: Use Gaussian normalization to favor normal/median values
-        # (not too wide, not blinking)
-        eye_openness_scores = MetricNormalizer.normalize_gaussian(
-            [f.eye_openness for f in features],
-            target=None,   # Use median as target
-            sigma=None,    # Use data std
-            inverse=False  # Peak at median (normal eye openness) gets score 1.0
-        )
-
-        # Motion: Lower is better (inverse normalization)
-        motion_stability_scores = MetricNormalizer.normalize(
-            [f.motion_magnitude for f in features],
-            inverse=True
-        )
-
-        # Expression: Lower activity is better (inverse normalization)
-        expression_neutrality_scores = MetricNormalizer.normalize(
-            [f.expression_activity for f in features],
-            inverse=True
-        )
-
-        # Pose: Lower deviation is better (inverse normalization)
-        pose_stability_scores = MetricNormalizer.normalize(
-            [f.pose_deviation for f in features],
-            inverse=True
-        )
-
-        # Sharpness: Higher is better (normal normalization)
-        visual_sharpness_scores = MetricNormalizer.normalize(
-            [f.sharpness for f in features],
-            inverse=False
-        )
-
-        # Stage 2: Calculate quality penalties and stability boosts
-        logger.debug("Stage 2: Computing quality penalties and stability boosts")
-        quality_penalties = self.quality_gate.calculate_penalties(features)
-        stability_boosts = self.stability_analyzer.calculate_stability_boosts(features)
-
-        # Stage 3: Compute composite scores (before context window)
-        logger.debug("Stage 3: Computing weighted composite scores")
-        frame_scores = []
+        scores = []
         for i, feat in enumerate(features):
-            composite = (
-                self.config.eye_openness_weight * eye_openness_scores[i] +
-                self.config.motion_stability_weight * motion_stability_scores[i] +
-                self.config.expression_neutrality_weight * expression_neutrality_scores[i] +
-                self.config.pose_stability_weight * pose_stability_scores[i] +
-                self.config.visual_sharpness_weight * visual_sharpness_scores[i]
+            # Eye score
+            eye_score = self._score_eye(feat.eye_openness)
+            
+            # Mouth score
+            mouth_score = self._score_mouth(feat.mouth_openness)
+            
+            # Sharpness score
+            sharpness_score = sharpness_scores.get(feat.frame_index, 0.5)
+            
+            # Consistency score
+            consistency_score = consistency_scores.get(feat.frame_index, 0.5)
+            
+            # Penalize frames with no face detected
+            if not feat.face_detected:
+                eye_score = 0.0
+                mouth_score = 0.0
+                sharpness_score = 0.0
+                consistency_score = 0.0
+            
+            # Weighted combination
+            final_score = (
+                self.config.eye_weight * eye_score +
+                self.config.mouth_weight * mouth_score +
+                self.config.sharpness_weight * sharpness_score +
+                self.config.consistency_weight * consistency_score
             )
-
-            frame_scores.append(FrameScore(
+            
+            scores.append(FrameScore(
                 frame_index=feat.frame_index,
                 timestamp=feat.timestamp,
-                composite_score=composite,
-                context_score=0.0,
-                eye_openness_score=eye_openness_scores[i],
-                motion_stability_score=motion_stability_scores[i],
-                expression_neutrality_score=expression_neutrality_scores[i],
-                pose_stability_score=pose_stability_scores[i],
-                visual_sharpness_score=visual_sharpness_scores[i],
-                quality_penalty=quality_penalties[i],
-                stability_boost=stability_boosts[i],
-                final_score=0.0  # Will be calculated after context window
+                eye_score=eye_score,
+                mouth_score=mouth_score,
+                final_score=final_score,
+                # Legacy fields for backward compatibility
+                eye_openness_score=eye_score,
+                expression_neutrality_score=mouth_score,
+                visual_sharpness_score=sharpness_score,
+                motion_stability_score=consistency_score,
+                composite_score=final_score,
+                context_score=final_score,
             ))
 
-        # Stage 4: Apply context window
-        logger.debug("Stage 4: Applying temporal context window")
-        context_scores = self._apply_context_window(frame_scores)
-
-        # Stage 5: Calculate final scores using context-aware scores
-        logger.debug("Stage 5: Computing final scores")
-        for score, context in zip(frame_scores, context_scores):
-            score.context_score = context
-            # Use context score (temporal smoothing) instead of raw composite
-            score.final_score = context * score.quality_penalty * score.stability_boost
-
-        # Log statistics
-        final_scores = [s.final_score for s in frame_scores]
         logger.info(
-            "Scoring complete: min=%.4f, max=%.4f, mean=%.4f",
-            min(final_scores),
-            max(final_scores),
-            np.mean(final_scores)
+            "Scored %d frames: best=%.3f, worst=%.3f",
+            len(scores),
+            max(s.final_score for s in scores),
+            min(s.final_score for s in scores)
         )
 
-        return frame_scores
+        return scores
 
-    def _apply_context_window(self, frame_scores: List[FrameScore]) -> List[float]:
+    def _compute_sharpness_scores(self, features: List[FrameFeatures]) -> Dict[int, float]:
         """
-        Apply sliding window averaging to composite scores.
-
-        This rewards frames that are part of stable sequences by averaging
-        their composite scores with neighboring frames within the window.
-
-        Args:
-            frame_scores: List of FrameScore objects with composite scores
-
-        Returns:
-            List of context scores (temporally smoothed composite scores)
-
-        Note:
-            Window is centered on each frame, with partial windows at boundaries
+        Normalize sharpness values to 0-1 scores.
+        Uses min-max normalization with a floor threshold.
         """
-        window_size = self.config.context_window_size
-        half_window = window_size // 2
+        sharpness_values = [f.sharpness for f in features if f.face_detected]
+        
+        if not sharpness_values:
+            return {f.frame_index: 0.0 for f in features}
+        
+        min_sharp = self.config.min_sharpness
+        max_sharp = max(sharpness_values)
+        
+        if max_sharp <= min_sharp:
+            return {f.frame_index: 1.0 for f in features}
+        
+        scores = {}
+        for f in features:
+            if f.sharpness < min_sharp:
+                scores[f.frame_index] = 0.0
+            else:
+                scores[f.frame_index] = min(1.0, (f.sharpness - min_sharp) / (max_sharp - min_sharp))
+        
+        return scores
 
-        composite_scores = [fs.composite_score for fs in frame_scores]
-        context_scores = []
+    def _compute_consistency_scores(self, features: List[FrameFeatures]) -> Dict[int, float]:
+        """
+        Score frame consistency based on face position stability.
+        Compares each frame to its neighbors - penalizes sudden jumps.
+        """
+        if len(features) < 3:
+            return {f.frame_index: 1.0 for f in features}
+        
+        scores = {}
+        max_delta = self.config.max_position_delta
+        
+        for i, feat in enumerate(features):
+            if not feat.face_detected:
+                scores[feat.frame_index] = 0.0
+                continue
+            
+            # Compare to previous and next frames
+            deltas = []
+            
+            if i > 0 and features[i-1].face_detected:
+                prev_center = features[i-1].face_center
+                delta = math.sqrt(
+                    (feat.face_center[0] - prev_center[0])**2 +
+                    (feat.face_center[1] - prev_center[1])**2
+                )
+                deltas.append(delta)
+            
+            if i < len(features) - 1 and features[i+1].face_detected:
+                next_center = features[i+1].face_center
+                delta = math.sqrt(
+                    (feat.face_center[0] - next_center[0])**2 +
+                    (feat.face_center[1] - next_center[1])**2
+                )
+                deltas.append(delta)
+            
+            if not deltas:
+                scores[feat.frame_index] = 0.5
+                continue
+            
+            avg_delta = sum(deltas) / len(deltas)
+            
+            # Score: 1.0 if no movement, decreases as movement increases
+            if avg_delta <= 5:  # Small movement tolerance
+                scores[feat.frame_index] = 1.0
+            elif avg_delta >= max_delta:
+                scores[feat.frame_index] = 0.0
+            else:
+                scores[feat.frame_index] = 1.0 - (avg_delta - 5) / (max_delta - 5)
+        
+        return scores
 
-        for i in range(len(composite_scores)):
-            # Calculate window boundaries
-            start_idx = max(0, i - half_window)
-            end_idx = min(len(composite_scores), i + half_window + 1)
+    def _score_eye(self, ear: float) -> float:
+        """
+        Score eye openness. Best score when EAR is in normal range.
+        
+        - EAR < 0.2: Blink (bad) -> low score
+        - EAR 0.25-0.35: Normal (good) -> high score  
+        - EAR > 0.4: Wide eyes (slightly bad) -> medium score
+        """
+        if ear < EAR.MIN_VALID:
+            return 0.0
+        
+        # Normal range gets score 1.0
+        if EAR.NORMAL_MIN <= ear <= EAR.NORMAL_MAX:
+            return 1.0
+        
+        # Below normal (approaching blink)
+        if ear < EAR.NORMAL_MIN:
+            # Linear interpolation from 0 at MIN_VALID to 1 at NORMAL_MIN
+            return (ear - EAR.MIN_VALID) / (EAR.NORMAL_MIN - EAR.MIN_VALID)
+        
+        # Above normal (wide eyes) - less penalty than blinks
+        if ear > EAR.NORMAL_MAX:
+            # Gradual decrease, but not as severe
+            excess = ear - EAR.NORMAL_MAX
+            return max(0.5, 1.0 - excess * 2)
+        
+        return 1.0
 
-            # Average scores within window
-            window_values = composite_scores[start_idx:end_idx]
-            context_score = np.mean(window_values)
-
-            context_scores.append(float(context_score))
-
-        return context_scores
+    def _score_mouth(self, mar: float) -> float:
+        """
+        Score mouth openness. Best score when mouth is closed.
+        
+        - MAR < 0.15: Closed mouth (best) -> score 1.0
+        - MAR 0.15-0.30: Slightly open -> decreasing score
+        - MAR > 0.30: Open/talking (bad) -> low score
+        """
+        if mar <= MAR.CLOSED_MOUTH_MAX:
+            return 1.0
+        
+        if mar <= MAR.SLIGHTLY_OPEN_MAX:
+            # Linear decrease from 1.0 to 0.5
+            ratio = (mar - MAR.CLOSED_MOUTH_MAX) / (MAR.SLIGHTLY_OPEN_MAX - MAR.CLOSED_MOUTH_MAX)
+            return 1.0 - (ratio * 0.5)
+        
+        # Open mouth - heavy penalty
+        # Score decreases from 0.5 towards 0 as MAR increases
+        excess = mar - MAR.SLIGHTLY_OPEN_MAX
+        return max(0.0, 0.5 - excess * 2)

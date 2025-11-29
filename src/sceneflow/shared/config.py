@@ -1,39 +1,24 @@
 from dataclasses import dataclass
 
-from sceneflow.shared.exceptions import WeightSumError, WindowSizeError
-
 
 @dataclass
 class RankingConfig:
-    # Base scoring weights (must sum to 1.0)
-    # Adjusted weights to penalize open mouths more strongly
-    eye_openness_weight: float = 0.20           # Eye openness (prefer normal, not blinking/wide)
-    motion_stability_weight: float = 0.25       # Motion stability (prefer low motion)
-    expression_neutrality_weight: float = 0.30  # Expression neutrality (prefer neutral face) - INCREASED
-    pose_stability_weight: float = 0.15         # Pose stability (prefer stable head position)
-    visual_sharpness_weight: float = 0.10       # Visual sharpness (prefer sharp images)
-
-    context_window_size: int = 5
-
-    # Multi-stage ranking parameters
-    quality_gate_percentile: float = 75.0
-    local_stability_window: int = 5
-
-    # Multi-face detection parameters
-    center_weighting_strength: float = 1.0      # Controls center distance weighting (higher = stronger center bias)
-    min_face_confidence: float = 0.5            # Minimum confidence for face detection (0-1)
+    """Config for podcast/talking head cut point detection."""
+    
+    # Weights for scoring (must sum to 1.0)
+    eye_weight: float = 0.30       # Penalize blinks
+    mouth_weight: float = 0.40     # Penalize open mouth - most important
+    sharpness_weight: float = 0.15  # Penalize blurry/motion blur frames
+    consistency_weight: float = 0.15  # Penalize sudden movements
+    
+    # Thresholds
+    min_sharpness: float = 50.0    # Minimum acceptable sharpness
+    max_position_delta: float = 30.0  # Max face movement in pixels for consistency
+    
+    # Face detection
+    min_face_confidence: float = 0.5
 
     def validate(self):
-        total = (
-            self.eye_openness_weight +
-            self.motion_stability_weight +
-            self.expression_neutrality_weight +
-            self.pose_stability_weight +
-            self.visual_sharpness_weight
-        )
+        total = self.eye_weight + self.mouth_weight + self.sharpness_weight + self.consistency_weight
         if abs(total - 1.0) >= 0.01:
-            raise WeightSumError(total)
-        if self.context_window_size % 2 != 1:
-            raise WindowSizeError("context_window_size", self.context_window_size)
-        if self.local_stability_window % 2 != 1:
-            raise WindowSizeError("local_stability_window", self.local_stability_window)
+            raise ValueError(f"Weights must sum to 1.0, got {total}")

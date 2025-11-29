@@ -14,8 +14,7 @@ from sceneflow.shared import (
     RankingConfig,
     FrameFeatures,
     FrameScore,
-    RankedFrame,
-    FaceFeatures,
+    RankedFrame
 )
 
 # Core classes
@@ -50,7 +49,6 @@ __all__ = [
     'FrameFeatures',
     'FrameScore',
     'RankedFrame',
-    'FaceFeatures',
 
     # Airtable integration (optional)
     'AirtableUploader',

@@ -33,7 +33,6 @@ from sceneflow.shared.exceptions import (
     AirtableError,
 )
 from sceneflow.shared.models import (
-    FaceFeatures,
     FrameFeatures,
     FrameScore,
     RankedFrame,
@@ -71,7 +70,6 @@ __all__ = [
     'AirtableError',
 
     # Models
-    'FaceFeatures',
     'FrameFeatures',
     'FrameScore',
     'RankedFrame',

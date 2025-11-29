@@ -3,12 +3,12 @@ Energy-based speech end refinement.
 
 Refines VAD timestamps by detecting sudden drops in audio energy levels.
 """
-import cv2
 import librosa
 import numpy as np
 import logging
 
 from sceneflow.shared.models import EnergyRefinementResult
+from sceneflow.utils.video import get_video_properties
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,8 @@ class EnergyRefiner:
         Returns:
             EnergyRefinementResult dataclass with refined timestamp and metadata
         """
-        # Get video properties
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
+        props = get_video_properties(video_path)
+        fps = props.fps
 
         # Convert VAD timestamp to frame
         vad_frame = int(vad_timestamp * fps)

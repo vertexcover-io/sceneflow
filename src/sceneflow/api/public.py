@@ -224,7 +224,7 @@ def _upload_to_airtable(
     Raises:
         RuntimeError: If upload fails or data is missing
     """
-    from .airtable_uploader import upload_to_airtable as airtable_upload
+    from sceneflow.integration import upload_to_airtable as airtable_upload
 
     logger.info("Uploading results to Airtable...")
 

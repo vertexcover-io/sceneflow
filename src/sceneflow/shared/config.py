@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from sceneflow.shared.exceptions import WeightSumError, WindowSizeError
+
 
 @dataclass
 class RankingConfig:
@@ -29,6 +31,9 @@ class RankingConfig:
             self.pose_stability_weight +
             self.visual_sharpness_weight
         )
-        assert abs(total - 1.0) < 0.01, f"Weights must sum to 1.0, got {total}"
-        assert self.context_window_size % 2 == 1, "Context window size must be odd"
-        assert self.local_stability_window % 2 == 1, "Stability window size must be odd"
+        if abs(total - 1.0) >= 0.01:
+            raise WeightSumError(total)
+        if self.context_window_size % 2 != 1:
+            raise WindowSizeError("context_window_size", self.context_window_size)
+        if self.local_stability_window % 2 != 1:
+            raise WindowSizeError("local_stability_window", self.local_stability_window)

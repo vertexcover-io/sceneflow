@@ -2,8 +2,7 @@ import os
 import base64
 import logging
 from typing import List, Optional
-import cv2
-import numpy as np
+
 from openai import OpenAI
 
 from sceneflow.shared.models import (
@@ -15,6 +14,7 @@ from sceneflow.shared.models import (
     NormalizedScores,
     RawMeasurements,
 )
+from sceneflow.utils.video import extract_frame_at_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -66,18 +66,7 @@ class LLMFrameSelector:
         return frames_data[selected_index]["frame"]
 
     def _extract_frame_image(self, video_path: str, timestamp: float) -> bytes:
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_number = int(timestamp * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret:
-            raise ValueError(f"Failed to extract frame at timestamp {timestamp}")
-
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return buffer.tobytes()
+        return extract_frame_at_timestamp(video_path, timestamp)
 
     def _build_metadata(
         self,

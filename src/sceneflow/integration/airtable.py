@@ -3,11 +3,8 @@
 import os
 import json
 import logging
-import tempfile
-import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
-import cv2
+from typing import Optional, Dict, Any
 
 try:
     from pyairtable import Api, Base, Table
@@ -15,7 +12,9 @@ try:
 except ImportError:
     PYAIRTABLE_AVAILABLE = False
 
+from sceneflow.shared.constants import VIDEO
 from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
+from sceneflow.utils.video import extract_frame, cut_video_to_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -261,21 +260,7 @@ class AirtableUploader:
         Returns:
             JPEG image as bytes
         """
-        cap = cv2.VideoCapture(video_path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret:
-            raise RuntimeError(f"Failed to extract frame {frame_index} from video")
-
-        # Encode frame as JPEG
-        success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-
-        if not success:
-            raise RuntimeError("Failed to encode frame as JPEG")
-
-        return buffer.tobytes()
+        return extract_frame(video_path, frame_index, VIDEO.JPEG_QUALITY_HIGH)
 
     def _generate_cut_video(self, video_path: str, cut_timestamp: float) -> bytes:
         """
@@ -291,47 +276,10 @@ class AirtableUploader:
         Raises:
             RuntimeError: If ffmpeg is not available or video generation fails
         """
-        # Create temporary file for cut video
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-            temp_path = temp_file.name
-
         try:
-            # Use ffmpeg to cut the video
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-t', str(cut_timestamp),
-                '-c:v', 'libx264',
-                '-c:a', 'aac',
-                '-y',
-                temp_path
-            ]
-
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-
-            # Read the generated video
-            with open(temp_path, 'rb') as f:
-                video_bytes = f.read()
-
-            return video_bytes
-
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"ffmpeg failed to cut video: {e.stderr}")
-        except FileNotFoundError:
-            raise RuntimeError(
-                "ffmpeg not found. Please install ffmpeg to use Airtable integration."
-            )
-        finally:
-            # Clean up temporary file
-            try:
-                Path(temp_path).unlink()
-            except Exception:
-                pass
+            return cut_video_to_bytes(video_path, cut_timestamp)
+        except Exception as e:
+            raise RuntimeError(f"Failed to cut video: {e}")
 
     def _prepare_metadata(
         self,

@@ -460,3 +460,146 @@ def extract_frame_at_timestamp(
     props = get_video_properties(video_path)
     frame_index = int(timestamp * props.fps)
     return extract_frame(video_path, frame_index, jpeg_quality)
+
+
+def cut_video(
+    video_path: str,
+    cut_timestamp: float,
+    output_path: Optional[str] = None
+) -> str:
+    """
+    Cut video from start to the specified timestamp using FFmpeg.
+
+    Args:
+        video_path: Path to input video file
+        cut_timestamp: Timestamp where to cut the video (in seconds)
+        output_path: Optional custom output path for the cut video.
+                    If None, saves to output/<video_name>_cut.mp4
+
+    Returns:
+        Path to the saved cut video
+
+    Raises:
+        FFmpegNotFoundError: If ffmpeg is not installed
+        FFmpegExecutionError: If ffmpeg command fails
+
+    Example:
+        >>> output = cut_video("video.mp4", 5.5)
+        >>> print(output)
+        output/video_cut.mp4
+    """
+    import subprocess
+    from sceneflow.shared.constants import FFMPEG
+    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
+
+    if output_path:
+        final_output_path = Path(output_path)
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        video_base_name = Path(video_path).stem
+        output_dir = Path("output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_filename = f"{video_base_name}_cut.mp4"
+        final_output_path = output_dir / output_filename
+
+    logger.info("Cutting video from 0.00s to %.2fs using FFmpeg", cut_timestamp)
+
+    cmd = [
+        'ffmpeg',
+        '-i', video_path,
+        '-t', f'{cut_timestamp:.6f}',
+        '-c:v', FFMPEG.VIDEO_CODEC,
+        '-c:a', FFMPEG.AUDIO_CODEC,
+        '-y',
+        str(final_output_path)
+    ]
+
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG.TIMEOUT_SECONDS
+        )
+        logger.info("Saved cut video (0.00s - %.2fs) to: %s", cut_timestamp, final_output_path)
+        return str(final_output_path)
+
+    except FileNotFoundError:
+        raise FFmpegNotFoundError()
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg timeout after %d seconds", FFMPEG.TIMEOUT_SECONDS)
+        raise FFmpegExecutionError(
+            ' '.join(cmd),
+            f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error("FFmpeg failed: %s", e.stderr)
+        raise FFmpegExecutionError(' '.join(cmd), e.stderr)
+
+
+def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
+    """
+    Cut video from start to timestamp and return as bytes.
+
+    Useful for uploading to external services like Airtable.
+
+    Args:
+        video_path: Path to input video file
+        cut_timestamp: Timestamp where to cut the video (in seconds)
+
+    Returns:
+        Cut video as bytes
+
+    Raises:
+        FFmpegNotFoundError: If ffmpeg is not installed
+        FFmpegExecutionError: If ffmpeg command fails
+
+    Example:
+        >>> video_bytes = cut_video_to_bytes("video.mp4", 5.5)
+        >>> len(video_bytes)
+        123456
+    """
+    import subprocess
+    from sceneflow.shared.constants import FFMPEG
+    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
+
+    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    try:
+        cmd = [
+            'ffmpeg',
+            '-i', video_path,
+            '-t', f'{cut_timestamp:.6f}',
+            '-c:v', FFMPEG.VIDEO_CODEC,
+            '-c:a', FFMPEG.AUDIO_CODEC,
+            '-y',
+            temp_path
+        ]
+
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG.TIMEOUT_SECONDS
+        )
+
+        with open(temp_path, 'rb') as f:
+            return f.read()
+
+    except FileNotFoundError:
+        raise FFmpegNotFoundError()
+    except subprocess.TimeoutExpired:
+        raise FFmpegExecutionError(
+            ' '.join(cmd),
+            f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
+        )
+    except subprocess.CalledProcessError as e:
+        raise FFmpegExecutionError(' '.join(cmd), e.stderr)
+    finally:
+        try:
+            Path(temp_path).unlink()
+        except Exception:
+            pass

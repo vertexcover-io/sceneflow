@@ -6,7 +6,6 @@ ranking pipeline: feature extraction, scoring, and selection of optimal cut poin
 
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -14,16 +13,11 @@ import cv2
 import numpy as np
 
 from sceneflow.shared.config import RankingConfig
-from sceneflow.shared.constants import FFMPEG
-from sceneflow.shared.exceptions import (
-    NoValidFramesError,
-    FFmpegNotFoundError,
-    FFmpegExecutionError,
-)
+from sceneflow.shared.exceptions import NoValidFramesError
 from sceneflow.extraction import FeatureExtractor, LEFT_EYE_INDICES, RIGHT_EYE_INDICES, MOUTH_OUTER_INDICES
 from sceneflow.shared.models import FrameFeatures, FrameScore, RankedFrame
 from sceneflow.core.scorer import FrameScorer
-from sceneflow.utils.video import VideoCapture, get_video_properties
+from sceneflow.utils.video import VideoCapture, get_video_properties, cut_video
 
 logger = logging.getLogger(__name__)
 
@@ -555,58 +549,4 @@ class CutPointRanker:
             FFmpegNotFoundError: If ffmpeg is not installed
             FFmpegExecutionError: If ffmpeg command fails
         """
-        if output_path:
-            # Use custom output path
-            final_output_path = Path(output_path)
-            # Create parent directory if it doesn't exist
-            final_output_path.parent.mkdir(parents=True, exist_ok=True)
-        else:
-            # Default behavior: save to output directory
-            video_base_name = Path(video_path).stem
-            output_dir = Path("output")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_filename = f"{video_base_name}_cut.mp4"
-            final_output_path = output_dir / output_filename
-
-        logger.info(
-            "Cutting video from 0.00s to %.2fs using FFmpeg",
-            cut_timestamp
-        )
-
-        # Build FFmpeg command
-        cmd = [
-            'ffmpeg',
-            '-i', video_path,
-            '-t', f'{cut_timestamp:.6f}',
-            '-c:v', FFMPEG.VIDEO_CODEC,
-            '-c:a', FFMPEG.AUDIO_CODEC,
-            '-y',  # Overwrite output file if exists
-            str(final_output_path)
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=FFMPEG.TIMEOUT_SECONDS
-            )
-            logger.info(
-                "Saved cut video (0.00s - %.2fs) to: %s",
-                cut_timestamp,
-                final_output_path
-            )
-            return str(final_output_path)
-
-        except FileNotFoundError:
-            raise FFmpegNotFoundError()
-        except subprocess.TimeoutExpired:
-            logger.error("FFmpeg timeout after %d seconds", FFMPEG.TIMEOUT_SECONDS)
-            raise FFmpegExecutionError(
-                ' '.join(cmd),
-                f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error("FFmpeg failed: %s", e.stderr)
-            raise FFmpegExecutionError(' '.join(cmd), e.stderr)
+        return cut_video(video_path, cut_timestamp, output_path)

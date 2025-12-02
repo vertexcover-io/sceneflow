@@ -7,7 +7,7 @@ and temporal stability.
 """
 
 # Main public API
-from sceneflow.api import get_cut_frame, get_ranked_cut_frames
+from sceneflow.api import get_cut_frame, get_ranked_cut_frames, cut_video
 
 # Shared foundational modules (re-exported for convenience)
 from sceneflow.shared import (
@@ -36,6 +36,7 @@ __all__ = [
     # Main API functions
     'get_cut_frame',
     'get_ranked_cut_frames',
+    'cut_video',
 
     # Core classes
     'CutPointRanker',

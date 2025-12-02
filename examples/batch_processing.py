@@ -3,14 +3,14 @@ Batch Processing Example - Process Multiple Videos
 
 This example shows how to:
 - Iterate over all video files in a folder
-- Process each video with get_cut_frame()
+- Process each video with cut_video()
 - Save annotated frames and cut videos for each
 - Handle errors gracefully for individual videos
 """
 
 import logging
 from pathlib import Path
-from sceneflow import get_cut_frame, RankingConfig
+from sceneflow import cut_video, RankingConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,15 +61,15 @@ def main():
         print("-" * 80)
 
         try:
-            # Generate output path for cut video
+            # Generate output path for the cut video
             output_path = f"output/{video_path.stem}_cut.mp4"
 
-            # Process video with save_frames and output path
-            best_time = get_cut_frame(
+            # Process video and save cut video, frames, and logs
+            best_time = cut_video(
                 str(video_path),
+                output_path,
                 sample_rate=1,  # Skip every other frame for faster processing
                 save_frames=True,  # Save annotated frames with landmarks
-                output=output_path,  # Save cut video (requires ffmpeg)
                 save_logs=True
             )
 

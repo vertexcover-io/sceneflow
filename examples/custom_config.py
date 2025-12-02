@@ -8,7 +8,7 @@ This example shows how to customize the ranking algorithm:
 """
 
 import logging
-from sceneflow import get_cut_frame, get_ranked_cut_frames, RankingConfig
+from sceneflow import get_cut_frame, get_ranked_cut_frames, cut_video, RankingConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,21 +63,22 @@ def example_save_outputs():
     print("=" * 60)
 
     video_path = "your_video.mp4"
+    output_path = "output/your_video_cut.mp4"
 
     print("\nAnalyzing video and saving outputs...")
     print("- Saving annotated frames with facial landmarks")
     print("- Saving cut video (requires ffmpeg)")
 
-    best_time = get_cut_frame(
+    best_time = cut_video(
         video_path,
-        save_frames=True,   # Save frames with MediaPipe landmarks
-        output="output/your_video_cut.mp4"  # Save cut video (requires ffmpeg installed)
+        output_path,
+        save_frames=True   # Save frames with InsightFace landmarks
     )
 
     print(f"\n✓ Best cut point: {best_time:.2f}s")
-    print(f"\nOutputs saved to output/ directory:")
+    print(f"\nOutputs saved:")
     print(f"  - Annotated frames: output/<video_name>/")
-    print(f"  - Cut video: output/your_video_cut.mp4")
+    print(f"  - Cut video: {output_path}")
 
 
 def example_combined():

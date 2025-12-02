@@ -67,6 +67,10 @@ PUBLISHING.md
 *.swo
 *~
 
+# test_*
+old_*
+new_dataset/
+
 # Project specific
 output/
 *.mp4

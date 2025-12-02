@@ -6,15 +6,24 @@ in AI-generated talking head videos based on facial features, visual quality,
 and temporal stability.
 """
 
-from .ranker import CutPointRanker
-from .config import RankingConfig
-from .models import FrameFeatures, FrameScore, RankedFrame
-from .api import get_cut_frame, get_ranked_cut_frames
-from .energy_refiner import EnergyRefiner
+# Main public API
+from sceneflow.api import get_cut_frame, get_ranked_cut_frames
+
+# Shared foundational modules (re-exported for convenience)
+from sceneflow.shared import (
+    RankingConfig,
+    FrameFeatures,
+    FrameScore,
+    RankedFrame
+)
+
+# Core classes
+from sceneflow.core import CutPointRanker
+from sceneflow.detection import SpeechDetector, EnergyRefiner
 
 # Airtable integration (optional - only import if available)
 try:
-    from .airtable_uploader import AirtableUploader, upload_to_airtable
+    from sceneflow.integration import AirtableUploader, upload_to_airtable
     AIRTABLE_AVAILABLE = True
 except ImportError:
     AIRTABLE_AVAILABLE = False
@@ -24,16 +33,28 @@ except ImportError:
 __version__ = "0.1.0"
 
 __all__ = [
+    # Main API functions
+    'get_cut_frame',
+    'get_ranked_cut_frames',
+
+    # Core classes
     'CutPointRanker',
+    'SpeechDetector',
+    'EnergyRefiner',
+
+    # Configuration
     'RankingConfig',
+
+    # Data models
     'FrameFeatures',
     'FrameScore',
     'RankedFrame',
-    'get_cut_frame',
-    'get_ranked_cut_frames',
-    'EnergyRefiner',
+
+    # Airtable integration (optional)
     'AirtableUploader',
     'upload_to_airtable',
     'AIRTABLE_AVAILABLE',
+
+    # Version
     '__version__'
 ]

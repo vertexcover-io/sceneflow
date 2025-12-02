@@ -20,7 +20,7 @@ logging.basicConfig(
 
 def main():
     # Configure the folder containing videos
-    video_folder = Path("D:/vertexcover/ai-video-cutter/dataset/AI")
+    video_folder = Path("new_dataset/videos")
 
     # Common video file extensions
     video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv'}
@@ -61,12 +61,15 @@ def main():
         print("-" * 80)
 
         try:
-            # Process video with save_frames and save_video enabled
+            # Generate output path for cut video
+            output_path = f"output/{video_path.stem}_cut.mp4"
+
+            # Process video with save_frames and output path
             best_time = get_cut_frame(
                 str(video_path),
-                sample_rate=2,  # Skip every other frame for faster processing
+                sample_rate=1,  # Skip every other frame for faster processing
                 save_frames=True,  # Save annotated frames with landmarks
-                save_video=True,    # Save cut video (requires ffmpeg)
+                output=output_path,  # Save cut video (requires ffmpeg)
                 save_logs=True
             )
 
@@ -78,7 +81,7 @@ def main():
 
             print(f"✓ Success! Best cut point: {best_time:.2f}s")
             print(f"  - Annotated frames saved to: output/{video_path.stem}/")
-            print(f"  - Cut video saved to: output/{video_path.stem}_cut.mp4")
+            print(f"  - Cut video saved to: {output_path}")
 
         except Exception as e:
             results.append({

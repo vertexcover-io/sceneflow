@@ -81,7 +81,7 @@ def _rank_frames(
     sample_rate: int,
     save_frames: bool = False,
     save_logs: bool = False,
-    save_video: bool = False,
+    output_path: Optional[str] = None,
     return_internals: bool = False
 ) -> Tuple[List[RankedFrame], Optional[List[FrameFeatures]], Optional[List[FrameScore]]]:
     """Rank frames after speech ends."""
@@ -89,7 +89,8 @@ def _rank_frames(
     logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
 
     ranker = CutPointRanker(config)
-    
+    save_video = output_path is not None
+
     if return_internals:
         ranked_frames, features, scores = ranker.rank_frames(
             video_path=video_path,
@@ -98,6 +99,7 @@ def _rank_frames(
             sample_rate=sample_rate,
             save_frames=save_frames,
             save_video=save_video,
+            output_path=output_path,
             save_logs=save_logs,
             return_internals=True
         )
@@ -110,6 +112,7 @@ def _rank_frames(
             sample_rate=sample_rate,
             save_frames=save_frames,
             save_video=save_video,
+            output_path=output_path,
             save_logs=save_logs,
         )
         return ranked_frames, None, None
@@ -134,8 +137,6 @@ def _select_best_with_llm(
             ranked_frames=ranked_frames,
             speech_end_time=speech_end_time,
             video_duration=duration,
-            all_scores=scores,
-            all_features=features
         )
     except Exception as e:
         logger.warning("LLM selection failed: %s, using top result", e)
@@ -194,7 +195,7 @@ def get_cut_frame(
     source: str,
     config: Optional[RankingConfig] = None,
     sample_rate: int = 2,
-    save_video: bool = False,
+    output: Optional[str] = None,
     save_frames: bool = False,
     save_logs: bool = False,
     upload_to_airtable: bool = False,
@@ -214,7 +215,7 @@ def get_cut_frame(
         source: Video file path or direct video URL
         config: Optional custom RankingConfig for scoring weights
         sample_rate: Process every Nth frame (default: 2)
-        save_video: If True, saves cut video to output directory
+        output: If provided, saves cut video to this output path
         save_frames: If True, saves annotated frames
         save_logs: If True, saves detailed analysis logs
         upload_to_airtable: If True, uploads results to Airtable
@@ -260,7 +261,7 @@ def get_cut_frame(
             sample_rate=sample_rate,
             save_frames=save_frames,
             save_logs=save_logs,
-            save_video=save_video if not use_llm_selection else False,
+            output_path=output if not use_llm_selection else None,
             return_internals=need_internals
         )
 
@@ -268,16 +269,16 @@ def get_cut_frame(
             raise NoValidFramesError("No valid frames found for ranking")
 
         best_frame = ranked_frames[0]
-        
+
         if use_llm_selection and features and scores:
             best_frame = _select_best_with_llm(
                 video_path, ranked_frames, speech_end_time,
                 duration, scores, features, openai_api_key
             )
 
-        if save_video and use_llm_selection:
+        if output and use_llm_selection:
             ranker = CutPointRanker(config)
-            ranker._save_cut_video(video_path, best_frame.timestamp)
+            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
         if upload_to_airtable and features and scores:
             _upload_to_airtable(

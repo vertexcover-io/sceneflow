@@ -110,7 +110,6 @@ def _rank_frames_cli(
     duration: float,
     sample_rate: int,
     save_frames: bool,
-    save_video: bool,
     output: Optional[str],
     save_logs: bool,
     need_internals: bool,
@@ -127,6 +126,7 @@ def _rank_frames_cli(
         print(f"\n[2/2] Analyzing visual features from {speech_end_time:.2f}s to {duration:.2f}s...")
 
     ranker = CutPointRanker()
+    save_video = output is not None
 
     if need_internals:
         ranked_frames, features, scores = ranker.rank_frames(
@@ -183,8 +183,6 @@ def _apply_llm_selection_cli(
             ranked_frames=ranked_frames[:5],
             speech_end_time=speech_end_time,
             video_duration=duration,
-            all_scores=scores,
-            all_features=features
         )
 
         if verbose:
@@ -210,10 +208,12 @@ def _print_results(
     top_n: Optional[int],
     verbose: bool,
     save_frames: bool,
-    save_video: bool,
+    output: Optional[str],
     source: str
 ) -> None:
     """Print results based on mode (top-n, verbose, or simple)."""
+    save_video = output is not None
+
     if top_n is not None:
         # Mode: -n flag provided
         n = min(top_n, len(ranked_frames))
@@ -245,7 +245,7 @@ def _print_results(
                 if save_frames:
                     print(f"Annotated frames: output/{video_name}/")
                 if save_video:
-                    print(f"Cut video: output/{video_name}_cut.mp4")
+                    print(f"Cut video: {output if output else f'output/{video_name}_cut.mp4'}")
         else:
             # Compact output: just numbered list
             for i, frame in enumerate(ranked_frames[:n], 1):
@@ -278,7 +278,7 @@ def _print_results(
             if save_frames:
                 print(f"Annotated frames: output/{video_name}/")
             if save_video:
-                print(f"Cut video: output/{video_name}_cut.mp4")
+                print(f"Cut video: {output if output else f'output/{video_name}_cut.mp4'}")
     else:
         # Mode: Default (no -n, no --verbose)
         # Just print the single best timestamp
@@ -391,13 +391,9 @@ def main(
             help="Save annotated frames with InsightFace 106 landmarks to output directory"
         ),
     ] = False,
-    save_video: Annotated[
-        bool,
-        cyclopts.Parameter(help="Save cut video from start to best timestamp (requires ffmpeg)"),
-    ] = False,
     output: Annotated[
         Optional[str],
-        cyclopts.Parameter(help="Output path for saved video (automatically enables --save-video)"),
+        cyclopts.Parameter(help="Output path for cut video (requires ffmpeg)"),
     ] = None,
     save_logs: Annotated[
         bool,
@@ -457,10 +453,10 @@ def main(
         # From URL
         sceneflow https://example.com/video.mp4 --verbose
 
-        # Save annotated frames, cut video, and logs
-        sceneflow video.mp4 --save-frames --save-video --save-logs
+        # Save annotated frames and logs
+        sceneflow video.mp4 --save-frames --save-logs
 
-        # Save video to custom output path (auto-enables --save-video)
+        # Save cut video to custom output path
         sceneflow video.mp4 --output /path/to/my_output.mp4
 
         # Upload results to Airtable (requires environment variables)
@@ -512,13 +508,6 @@ def main(
 
         logger.info("Analyzing video: %s", Path(video_path).name)
 
-        # Auto-enable save_video if output path is specified
-        if output and not save_video:
-            save_video = True
-            logger.info("Auto-enabling video save because output path was specified: %s", output)
-            if verbose:
-                print(f"Note: Automatically enabling video save to: {output}")
-
         # Print verbose header
         if verbose:
             _print_verbose_header(
@@ -560,7 +549,7 @@ def main(
                 end_time=duration,
                 sample_rate=sample_rate,
                 save_frames=save_frames,
-                save_video=save_video,
+                save_video=output is not None,
                 output_path=output,
                 save_logs=save_logs,
             )
@@ -587,7 +576,6 @@ def main(
                 duration,
                 sample_rate,
                 save_frames,
-                save_video,
                 output,
                 save_logs,
                 need_internals,
@@ -616,7 +604,7 @@ def main(
             )
 
         # Save video with correct timestamp (after LLM selection)
-        if save_video and (use_llm_selection or airtable) and not top_n:
+        if output and (use_llm_selection or airtable) and not top_n:
             ranker = CutPointRanker()
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
@@ -633,7 +621,7 @@ def main(
             top_n,
             verbose,
             save_frames,
-            save_video,
+            output,
             video_path
         )
 

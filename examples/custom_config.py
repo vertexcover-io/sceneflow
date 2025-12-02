@@ -71,13 +71,13 @@ def example_save_outputs():
     best_time = get_cut_frame(
         video_path,
         save_frames=True,   # Save frames with MediaPipe landmarks
-        save_video=True     # Save cut video (requires ffmpeg installed)
+        output="output/your_video_cut.mp4"  # Save cut video (requires ffmpeg installed)
     )
 
     print(f"\n✓ Best cut point: {best_time:.2f}s")
     print(f"\nOutputs saved to output/ directory:")
     print(f"  - Annotated frames: output/<video_name>/")
-    print(f"  - Cut video: output/<video_name>_cut.mp4")
+    print(f"  - Cut video: output/your_video_cut.mp4")
 
 
 def example_combined():

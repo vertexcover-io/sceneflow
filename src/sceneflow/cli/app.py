@@ -80,7 +80,7 @@ def _detect_speech_end_cli(
     vad_speech_end_time, confidence = detector.get_speech_end_time(source, return_confidence=True)
 
     if verbose:
-        print(f"      Speech ends at: {vad_speech_end_time:.2f}s (confidence: {confidence:.2f})")
+        print(f"      Speech ends at: {vad_speech_end_time:.4f}s (confidence: {confidence:.2f})")
 
     speech_end_time = vad_speech_end_time
 
@@ -124,7 +124,7 @@ def _rank_frames_cli(
         If need_internals=False, features and scores are None
     """
     if verbose:
-        print(f"\n[2/2] Analyzing visual features from {speech_end_time:.2f}s to {duration:.2f}s...")
+        print(f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s...")
 
     ranker = CutPointRanker()
 
@@ -187,11 +187,11 @@ def _apply_llm_selection_cli(
 
         if verbose:
             print(
-                f"      LLM selected frame at {best_frame.timestamp:.2f}s "
+                f"      LLM selected frame at {best_frame.timestamp:.4f}s "
                 f"(frame {best_frame.frame_index})"
             )
 
-        logger.info("LLM selected frame at %.2fs", best_frame.timestamp)
+        logger.info("LLM selected frame at %.4fs", best_frame.timestamp)
         return best_frame
 
     except Exception as e:
@@ -221,13 +221,13 @@ def _print_results(
             print(f"\n{'=' * 60}")
             print("RESULTS")
             print(f"{'=' * 60}")
-            print(f"\nBest cut point: {best_frame.timestamp:.2f}s")
+            print(f"\nBest cut point: {best_frame.timestamp:.4f}s")
             print(f"Frame: {best_frame.frame_index}")
             print(f"Score: {best_frame.score:.4f}")
             print(f"\nTop {n} candidates:")
             for i, frame in enumerate(ranked_frames[:n], 1):
                 print(
-                    f"  {i}. {frame.timestamp:.2f}s "
+                    f"  {i}. {frame.timestamp:.4f}s "
                     f"(frame {frame.frame_index}, score: {frame.score:.4f})"
                 )
 
@@ -247,20 +247,20 @@ def _print_results(
         else:
             # Compact output: just numbered list
             for i, frame in enumerate(ranked_frames[:n], 1):
-                print(f"{i}. {frame.timestamp:.2f}s (score: {frame.score:.4f})")
+                print(f"{i}. {frame.timestamp:.4f}s (score: {frame.score:.4f})")
 
     elif verbose:
         # Mode: --verbose only (no -n flag)
         print(f"\n{'=' * 60}")
         print("RESULTS")
         print(f"{'=' * 60}")
-        print(f"\nBest cut point: {best_frame.timestamp:.2f}s")
+        print(f"\nBest cut point: {best_frame.timestamp:.4f}s")
         print(f"Frame: {best_frame.frame_index}")
         print(f"Score: {best_frame.score:.4f}")
         print("\nTop 3 candidates:")
         for i, frame in enumerate(ranked_frames[:3], 1):
             print(
-                f"  {i}. {frame.timestamp:.2f}s "
+                f"  {i}. {frame.timestamp:.4f}s "
                 f"(frame {frame.frame_index}, score: {frame.score:.4f})"
             )
 
@@ -280,7 +280,7 @@ def _print_results(
     else:
         # Mode: Default (no -n, no --verbose)
         # Just print the single best timestamp
-        print(f"{best_frame.timestamp:.2f}")
+        print(f"{best_frame.timestamp:.4f}")
 
 
 def _save_json_output(
@@ -575,7 +575,7 @@ def main(
             duration = get_video_duration(video_path)
 
             if verbose:
-                print(f"      Video duration: {duration:.2f}s")
+                print(f"      Video duration: {duration:.4f}s")
 
             # Rank frames
             need_internals = use_llm_selection or airtable
@@ -619,7 +619,7 @@ def main(
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
         logger.info(
-            "Best cut point: %.2fs (score: %.4f)",
+            "Best cut point: %.4fs (score: %.4f)",
             best_frame.timestamp,
             best_frame.score
         )

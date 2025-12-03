@@ -502,7 +502,7 @@ def cut_video(
         output_filename = f"{video_base_name}_cut.mp4"
         final_output_path = output_dir / output_filename
 
-    logger.info("Cutting video from 0.00s to %.2fs using FFmpeg", cut_timestamp)
+    logger.info("Cutting video from 0.0000s to %.4fs using FFmpeg", cut_timestamp)
 
     cmd = [
         'ffmpeg',
@@ -522,7 +522,7 @@ def cut_video(
             text=True,
             timeout=FFMPEG.TIMEOUT_SECONDS
         )
-        logger.info("Saved cut video (0.00s - %.2fs) to: %s", cut_timestamp, final_output_path)
+        logger.info("Saved cut video (0.0000s - %.4fs) to: %s", cut_timestamp, final_output_path)
         return str(final_output_path)
 
     except FileNotFoundError:

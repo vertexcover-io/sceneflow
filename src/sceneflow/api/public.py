@@ -5,7 +5,7 @@ cut points in videos using multi-stage analysis.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sceneflow.shared.config import RankingConfig
 from sceneflow.detection import EnergyRefiner
@@ -29,7 +29,7 @@ def _detect_speech_end(
     use_energy_refinement: bool,
     energy_threshold_db: float,
     energy_lookback_frames: int
-) -> float:
+) -> Tuple[float, List[Dict[str, float]]]:
     """
     Detect when speech ends in video using VAD and optional energy refinement.
 
@@ -40,12 +40,13 @@ def _detect_speech_end(
         energy_lookback_frames: Frames to search backward
 
     Returns:
-        Speech end timestamp in seconds
+        Tuple of (speech_end_time, vad_segments)
     """
     logger.info("Stage 1: Detecting speech end time...")
     detector = SpeechDetector()
-    vad_speech_end_time = detector.get_speech_end_time(video_path)
-    logger.info("VAD detected speech end at: %.2fs", vad_speech_end_time)
+
+    vad_speech_end_time, vad_timestamps = detector.get_speech_timestamps(video_path)
+    logger.info("VAD detected speech end at: %.4fs", vad_speech_end_time)
 
     speech_end_time = vad_speech_end_time
 
@@ -70,7 +71,7 @@ def _detect_speech_end(
         else:
             logger.info("Energy refinement: No adjustment needed")
 
-    return speech_end_time
+    return speech_end_time, vad_timestamps
 
 
 def _rank_frames(
@@ -225,7 +226,7 @@ def get_cut_frame(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time = _detect_speech_end(
+        speech_end_time, _ = _detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -262,7 +263,7 @@ def get_cut_frame(
                 airtable_access_token, airtable_base_id, airtable_table_name
             )
 
-        logger.info("Best cut point: %.2fs (score: %.3f)", best_frame.timestamp, best_frame.score)
+        logger.info("Best cut point: %.4fs (frame: %d, score: %.3f)", best_frame.timestamp, best_frame.frame_index, best_frame.score)
         return best_frame.timestamp
 
     finally:
@@ -317,7 +318,7 @@ def get_ranked_cut_frames(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time = _detect_speech_end(
+        speech_end_time, _ = _detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -411,7 +412,7 @@ def cut_video(
 
     try:
         # Stage 1: Detect speech end
-        speech_end_time = _detect_speech_end(
+        speech_end_time, vad_timestamps = _detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -424,29 +425,27 @@ def cut_video(
         # Stage 2: Rank frames with save options
         ranker = CutPointRanker(config)
 
+        rank_kwargs = {
+            "video_path": video_path,
+            "start_time": speech_end_time,
+            "end_time": duration,
+            "sample_rate": sample_rate,
+            "save_frames": save_frames,
+            "save_video": not use_llm_selection,  # Save now if not using LLM, save later if using LLM
+            "output_path": output_path if not use_llm_selection else None,
+        }
+
+        if save_logs:
+            rank_kwargs["save_logs"] = True
+            rank_kwargs["vad_timestamps"] = vad_timestamps
+
         if need_internals:
             ranked_frames, features, scores = ranker.rank_frames(
-                video_path=video_path,
-                start_time=speech_end_time,
-                end_time=duration,
-                sample_rate=sample_rate,
-                save_frames=save_frames,
-                save_video=not use_llm_selection,  # Save now if not using LLM, save later if using LLM
-                output_path=output_path if not use_llm_selection else None,
-                save_logs=save_logs,
+                **rank_kwargs,
                 return_internals=True
             )
         else:
-            ranked_frames = ranker.rank_frames(
-                video_path=video_path,
-                start_time=speech_end_time,
-                end_time=duration,
-                sample_rate=sample_rate,
-                save_frames=save_frames,
-                save_video=not use_llm_selection,  # Save now if not using LLM, save later if using LLM
-                output_path=output_path if not use_llm_selection else None,
-                save_logs=save_logs,
-            )
+            ranked_frames = ranker.rank_frames(**rank_kwargs)
             features = None
             scores = None
 
@@ -474,7 +473,7 @@ def cut_video(
                 airtable_access_token, airtable_base_id, airtable_table_name
             )
 
-        logger.info("Best cut point: %.2fs (score: %.3f)", best_frame.timestamp, best_frame.score)
+        logger.info("Best cut point: %.4fs (frame: %d, score: %.3f)", best_frame.timestamp, best_frame.frame_index, best_frame.score)
         return best_frame.timestamp
 
     finally:

@@ -90,10 +90,10 @@ class EnergyRefiner:
             energy_levels=energy_levels
         )
 
-        logger.info(f"VAD timestamp: {vad_timestamp:.3f}s (frame {vad_frame})")
+        logger.info(f"VAD timestamp: {vad_timestamp:.4f}s (frame {vad_frame})")
         if refined_frame != vad_frame:
             logger.info(
-                f"Refined timestamp: {refined_timestamp:.3f}s (frame {refined_frame})"
+                f"Refined timestamp: {refined_timestamp:.4f}s (frame {refined_frame})"
             )
             logger.info(f"Adjusted by {vad_frame - refined_frame} frames backward")
             logger.info(f"Energy drop detected: {energy_drop:.2f} dB")

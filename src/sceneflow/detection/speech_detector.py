@@ -5,7 +5,7 @@ ends in video or audio files using deep learning-based voice activity detection.
 """
 
 import logging
-from typing import Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import librosa
 import numpy as np
@@ -195,6 +195,63 @@ class SpeechDetector:
 
         except AudioLoadError:
             # Re-raise audio loading errors
+            raise
+        except Exception as e:
+            logger.error("VAD speech detection failed: %s", e)
+            raise VADModelError(f"Speech detection failed: {str(e)}") from e
+
+    def get_speech_timestamps(
+        self,
+        file_path: str
+    ) -> Tuple[float, List[Dict[str, float]]]:
+        """
+        Get speech end time and all speech segment timestamps using Silero VAD.
+
+        Args:
+            file_path: Path to video or audio file
+
+        Returns:
+            Tuple of (speech_end_time, list of speech segments).
+            Each segment is a dict with 'start' and 'end' keys in seconds.
+
+        Raises:
+            AudioLoadError: If audio cannot be loaded from file
+            VADModelError: If VAD processing fails
+        """
+        logger.info("Detecting speech timestamps in: %s", file_path)
+
+        try:
+            wav, sample_rate = self._load_audio_for_vad(file_path)
+
+            speech_timestamps = get_speech_timestamps(
+                wav,
+                self.vad_model,
+                return_seconds=True,
+                sampling_rate=sample_rate,
+                threshold=VAD.THRESHOLD,
+                neg_threshold=VAD.NEG_THRESHOLD,
+                min_silence_duration_ms=VAD.MIN_SILENCE_DURATION_MS,
+                speech_pad_ms=VAD.SPEECH_PAD_MS,
+                time_resolution=VAD.TIME_RESOLUTION
+            )
+
+            logger.debug("VAD detected %d speech segments", len(speech_timestamps))
+
+            if not speech_timestamps:
+                logger.warning("No speech detected in %s", file_path)
+                return 0.0, []
+
+            segments = [
+                {"start": float(seg["start"]), "end": float(seg["end"])}
+                for seg in speech_timestamps
+            ]
+
+            vad_end_time = segments[-1]["end"]
+            logger.info("Speech ends at %.3fs, %d segments detected", vad_end_time, len(segments))
+
+            return vad_end_time, segments
+
+        except AudioLoadError:
             raise
         except Exception as e:
             logger.error("VAD speech detection failed: %s", e)

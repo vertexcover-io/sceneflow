@@ -85,7 +85,7 @@ class RankedFrame:
     score: float
 
     def __repr__(self) -> str:
-        return f"RankedFrame(rank={self.rank}, time={self.timestamp:.2f}s, score={self.score:.4f})"
+        return f"RankedFrame(rank={self.rank}, time={self.timestamp:.4f}s, score={self.score:.4f})"
 
 
 # Legacy models for backward compatibility

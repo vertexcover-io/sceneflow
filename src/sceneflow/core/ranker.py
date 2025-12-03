@@ -3,7 +3,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
 
@@ -51,6 +51,7 @@ class CutPointRanker:
         save_video: bool = False,
         output_path: Optional[str] = None,
         save_logs: bool = False,
+        vad_timestamps: Optional[List[Dict[str, float]]] = None,
         return_internals: bool = False
     ) -> Union[List[RankedFrame], Tuple[List[RankedFrame], List[FrameFeatures], List[FrameScore]]]:
         """
@@ -65,13 +66,14 @@ class CutPointRanker:
             save_video: If True, cut video from start to best timestamp
             output_path: Optional custom path for saved video
             save_logs: If True, save detailed logs
+            vad_timestamps: Optional list of VAD speech segments to include in logs
             return_internals: If True, return (frames, features, scores) tuple
 
         Returns:
             List of RankedFrame sorted by score (best first), or tuple with internals
         """
         logger.info(
-            "Ranking frames in range %.2f-%.2fs (sample_rate=%d)",
+            "Ranking frames in range %.4f-%.4fs (sample_rate=%d)",
             start_time, end_time, sample_rate
         )
 
@@ -80,7 +82,7 @@ class CutPointRanker:
 
         if not features:
             raise NoValidFramesError(
-                f"No features extracted from {video_path} in range {start_time:.2f}-{end_time:.2f}s"
+                f"No features extracted from {video_path} in range {start_time:.4f}-{end_time:.4f}s"
             )
 
         logger.info("Extracted features from %d frames", len(features))
@@ -103,7 +105,7 @@ class CutPointRanker:
         ]
 
         logger.info(
-            "Best cut point: %.2fs (score: %.3f)",
+            "Best cut point: %.4fs (score: %.3f)",
             ranked_frames[0].timestamp,
             ranked_frames[0].score
         )
@@ -113,7 +115,7 @@ class CutPointRanker:
             self._save_ranked_frames(video_path, ranked_frames)
 
         if save_logs:
-            self._save_frame_logs(video_path, ranked_frames, features, scores)
+            self._save_frame_logs(video_path, ranked_frames, features, scores, vad_timestamps)
 
         if save_video and ranked_frames:
             self._save_cut_video(video_path, ranked_frames[0].timestamp, output_path=output_path)
@@ -219,7 +221,8 @@ class CutPointRanker:
         video_path: str,
         ranked_frames: List[RankedFrame],
         features: List[FrameFeatures],
-        scores: List[FrameScore]
+        scores: List[FrameScore],
+        vad_timestamps: Optional[List[Dict[str, float]]] = None
     ) -> None:
         """Save detailed analysis logs."""
         video_base_name = Path(video_path).stem
@@ -261,6 +264,16 @@ class CutPointRanker:
             )
             with open(output_dir / output_filename, 'w') as f:
                 json.dump(log_data, f, indent=2)
+
+        if vad_timestamps:
+            vad_log_data = {
+                "speech_segments": vad_timestamps,
+                "total_segments": len(vad_timestamps),
+                "speech_end_time": vad_timestamps[-1]["end"] if vad_timestamps else 0.0
+            }
+            with open(output_dir / "vad_timestamps.json", 'w') as f:
+                json.dump(vad_log_data, f, indent=2)
+            logger.info("Saved VAD timestamps with %d segments", len(vad_timestamps))
 
         logger.info("Saved logs to: %s", output_dir)
 

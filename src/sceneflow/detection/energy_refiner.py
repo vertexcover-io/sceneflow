@@ -18,7 +18,7 @@ class EnergyRefiner:
 
     def __init__(
         self,
-        threshold_db: float = 8.0,
+        threshold_db: float = 10.0,
         lookback_frames: int = 20,
         min_silence_frames: int = 1,
     ):

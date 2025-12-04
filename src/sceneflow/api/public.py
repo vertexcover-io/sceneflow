@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from sceneflow.shared.config import RankingConfig
-from sceneflow.detection import EnergyRefiner
+from sceneflow.detection import EnergyRefiner, find_clean_ending_by_silence
 from sceneflow.shared.exceptions import NoValidFramesError
 from sceneflow.selection import LLMFrameSelector
 from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
@@ -28,16 +28,20 @@ def _detect_speech_end(
     video_path: str,
     use_energy_refinement: bool,
     energy_threshold_db: float,
-    energy_lookback_frames: int
+    energy_lookback_frames: int,
+    use_silence_cleaning: bool = False,
+    incomplete_threshold: float = 0.5,
 ) -> Tuple[float, List[Dict[str, float]]]:
     """
-    Detect when speech ends in video using VAD and optional energy refinement.
+    Detect when speech ends in video using VAD and optional refinements.
 
     Args:
         video_path: Path to video file
         use_energy_refinement: Whether to refine with energy analysis
         energy_threshold_db: Energy drop threshold in dB
         energy_lookback_frames: Frames to search backward
+        use_silence_cleaning: Whether to use silence-based cleaning to remove interruptions
+        incomplete_threshold: Maximum gap to consider segment incomplete (for silence cleaning)
 
     Returns:
         Tuple of (speech_end_time, vad_segments)
@@ -50,14 +54,43 @@ def _detect_speech_end(
 
     speech_end_time = vad_speech_end_time
 
+    # Apply refinements in sequence: silence cleaning first, then energy refinement
+    if use_silence_cleaning and use_energy_refinement:
+        logger.info("Both silence cleaning and energy refinement enabled - applying in sequence")
+
+    # Apply silence-based cleaning first if enabled
+    if use_silence_cleaning and vad_timestamps:
+        logger.info("Stage 1.5a: Applying silence-based cleaning to remove interruptions...")
+        video_duration = get_video_duration(video_path)
+        cleaned_end_time = find_clean_ending_by_silence(
+            vad_timestamps,
+            video_duration,
+            incomplete_threshold=incomplete_threshold
+        )
+
+        if cleaned_end_time != vad_speech_end_time:
+            logger.info(
+                "Silence cleaning adjusted speech end from %.4fs to %.4fs (%.2fs earlier)",
+                vad_speech_end_time,
+                cleaned_end_time,
+                vad_speech_end_time - cleaned_end_time
+            )
+            speech_end_time = cleaned_end_time
+        else:
+            logger.info("Silence cleaning: No adjustment needed")
+
+    # Apply energy refinement if enabled (operates on silence-cleaned timestamp if both are enabled)
     if use_energy_refinement:
-        logger.info("Stage 1.5: Refining speech end time with energy analysis...")
+        stage_label = "Stage 1.5b" if use_silence_cleaning else "Stage 1.5"
+        base_time_desc = "silence-cleaned" if use_silence_cleaning else "VAD-detected"
+        logger.info(f"{stage_label}: Refining {base_time_desc} speech end time with energy analysis...")
+
         refiner = EnergyRefiner(
             threshold_db=energy_threshold_db,
             lookback_frames=energy_lookback_frames
         )
         result = refiner.refine_speech_end(
-            vad_speech_end_time,
+            speech_end_time,
             video_path
         )
 
@@ -192,7 +225,10 @@ def get_cut_frame(
     openai_api_key: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
-    energy_lookback_frames: int = 20
+    energy_lookback_frames: int = 20,
+    use_silence_cleaning: bool = False,
+    incomplete_threshold: float = 0.5,
+    disable_visual_analysis: bool = False,
 ) -> float:
     """
     Get the single best cut point timestamp for a video.
@@ -210,6 +246,9 @@ def get_cut_frame(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
+        use_silence_cleaning: If True, removes incomplete speech segments at end
+        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
+        disable_visual_analysis: If True, skips visual ranking and returns speech end time
 
     Returns:
         Timestamp in seconds of the best cut point
@@ -230,8 +269,15 @@ def get_cut_frame(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
-            energy_lookback_frames
+            energy_lookback_frames,
+            use_silence_cleaning,
+            incomplete_threshold,
         )
+
+        # If visual analysis is disabled, return speech end time directly
+        if disable_visual_analysis:
+            logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
+            return speech_end_time
 
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable
@@ -282,7 +328,10 @@ def get_ranked_cut_frames(
     airtable_table_name: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
-    energy_lookback_frames: int = 20
+    energy_lookback_frames: int = 20,
+    use_silence_cleaning: bool = False,
+    incomplete_threshold: float = 0.5,
+    disable_visual_analysis: bool = False,
 ) -> List[float]:
     """
     Get the top N best cut point timestamps for a video.
@@ -299,6 +348,9 @@ def get_ranked_cut_frames(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
+        use_silence_cleaning: If True, removes incomplete speech segments at end
+        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
+        disable_visual_analysis: If True, skips visual ranking and returns speech end time only
 
     Returns:
         List of timestamps in seconds for the top N cut points
@@ -322,8 +374,15 @@ def get_ranked_cut_frames(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
-            energy_lookback_frames
+            energy_lookback_frames,
+            use_silence_cleaning,
+            incomplete_threshold,
         )
+
+        # If visual analysis is disabled, return speech end time only
+        if disable_visual_analysis:
+            logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
+            return [speech_end_time]
 
         duration = get_video_duration(video_path)
 
@@ -370,7 +429,10 @@ def cut_video(
     openai_api_key: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
-    energy_lookback_frames: int = 20
+    energy_lookback_frames: int = 20,
+    use_silence_cleaning: bool = False,
+    incomplete_threshold: float = 0.5,
+    disable_visual_analysis: bool = False,
 ) -> float:
     """
     Cut a video at the optimal point and save the cut video.
@@ -395,6 +457,9 @@ def cut_video(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
+        use_silence_cleaning: If True, removes incomplete speech segments at end
+        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
+        disable_visual_analysis: If True, skips visual ranking and cuts at speech end time
 
     Returns:
         Timestamp in seconds of the best cut point
@@ -416,8 +481,17 @@ def cut_video(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
-            energy_lookback_frames
+            energy_lookback_frames,
+            use_silence_cleaning,
+            incomplete_threshold
         )
+
+        # If visual analysis is disabled, cut at speech end time
+        if disable_visual_analysis:
+            logger.info("Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time)
+            ranker = CutPointRanker(config)
+            ranker._save_cut_video(video_path, speech_end_time, output_path=output_path)
+            return speech_end_time
 
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable

@@ -431,6 +431,12 @@ def main(
         int,
         cyclopts.Parameter(help="Maximum frames to search backward from VAD timestamp (default: 20)"),
     ] = 20,
+    disable_visual_analysis: Annotated[
+        bool,
+        cyclopts.Parameter(
+            help="Disable visual analysis and return speech end time only (faster, no frame ranking)"
+        ),
+    ] = False,
 ) -> None:
     """
     Analyze a talking head video and find the optimal cut point.
@@ -472,6 +478,9 @@ def main(
 
         # Fine-tune energy refinement
         sceneflow video.mp4 --energy-threshold-db 10.0 --energy-lookback-frames 25
+
+        # Disable visual analysis (faster, uses only speech detection)
+        sceneflow video.mp4 --disable-visual-analysis
 
     Environment Variables:
         AIRTABLE_ACCESS_TOKEN   Your Airtable access token
@@ -538,30 +547,48 @@ def main(
                 use_energy_refinement=not no_energy_refinement,
                 energy_threshold_db=energy_threshold_db,
                 energy_lookback_frames=energy_lookback_frames,
+                disable_visual_analysis=disable_visual_analysis,
             )
 
-            # Re-run with internals for detailed output
-            speech_end_time, vad_speech_end_time, confidence = _detect_speech_end_cli(
-                video_path,
-                no_energy_refinement,
-                energy_threshold_db,
-                energy_lookback_frames,
-                verbose=False  # Already processed, don't print again
-            )
+            # Re-run with internals for detailed output (skip if visual analysis disabled)
+            if disable_visual_analysis:
+                # Just use speech end time as the only result
+                speech_end_time, vad_speech_end_time, confidence = _detect_speech_end_cli(
+                    video_path,
+                    no_energy_refinement,
+                    energy_threshold_db,
+                    energy_lookback_frames,
+                    verbose=False
+                )
+                from sceneflow.shared.models import RankedFrame
+                ranked_frames = [RankedFrame(
+                    timestamp=speech_end_time,
+                    frame_index=0,
+                    score=1.0,
+                    rank=1
+                )]
+            else:
+                speech_end_time, vad_speech_end_time, confidence = _detect_speech_end_cli(
+                    video_path,
+                    no_energy_refinement,
+                    energy_threshold_db,
+                    energy_lookback_frames,
+                    verbose=False  # Already processed, don't print again
+                )
 
-            duration = get_video_duration(video_path)
+                duration = get_video_duration(video_path)
 
-            ranker = CutPointRanker()
-            ranked_frames = ranker.rank_frames(
-                video_path=video_path,
-                start_time=speech_end_time,
-                end_time=duration,
-                sample_rate=sample_rate,
-                save_frames=save_frames,
-                save_video=save_video,
-                output_path=output,
-                save_logs=save_logs,
-            )
+                ranker = CutPointRanker()
+                ranked_frames = ranker.rank_frames(
+                    video_path=video_path,
+                    start_time=speech_end_time,
+                    end_time=duration,
+                    sample_rate=sample_rate,
+                    save_frames=save_frames,
+                    save_video=save_video,
+                    output_path=output,
+                    save_logs=save_logs,
+                )
         else:
             # Single best result - manual flow
             speech_end_time, vad_speech_end_time, confidence = _detect_speech_end_cli(
@@ -572,25 +599,42 @@ def main(
                 verbose
             )
 
-            duration = get_video_duration(video_path)
+            # If visual analysis is disabled, return speech end time directly
+            if disable_visual_analysis:
+                if verbose:
+                    print(f"\n{'=' * 60}")
+                    print("Visual analysis disabled - using speech end time")
+                    print(f"{'=' * 60}")
 
-            if verbose:
-                print(f"      Video duration: {duration:.4f}s")
+                from sceneflow.shared.models import RankedFrame
+                ranked_frames = [RankedFrame(
+                    timestamp=speech_end_time,
+                    frame_index=0,
+                    score=1.0,
+                    rank=1
+                )]
+                features = None
+                scores = None
+            else:
+                duration = get_video_duration(video_path)
 
-            # Rank frames
-            need_internals = use_llm_selection or airtable
-            ranked_frames, features, scores = _rank_frames_cli(
-                video_path,
-                speech_end_time,
-                duration,
-                sample_rate,
-                save_frames,
-                save_video,
-                output,
-                save_logs,
-                need_internals,
-                verbose
-            )
+                if verbose:
+                    print(f"      Video duration: {duration:.4f}s")
+
+                # Rank frames
+                need_internals = use_llm_selection or airtable
+                ranked_frames, features, scores = _rank_frames_cli(
+                    video_path,
+                    speech_end_time,
+                    duration,
+                    sample_rate,
+                    save_frames,
+                    save_video,
+                    output,
+                    save_logs,
+                    need_internals,
+                    verbose
+                )
 
         if not ranked_frames:
             logger.error("No suitable cut points found")

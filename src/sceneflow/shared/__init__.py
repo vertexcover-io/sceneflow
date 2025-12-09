@@ -9,9 +9,6 @@ from sceneflow.shared.constants import (
     INSIGHTFACE,
     EAR,
     MAR,
-    MOTION,
-    SHARPNESS,
-    RANKING,
     VAD,
     FFMPEG,
 )
@@ -46,9 +43,6 @@ __all__ = [
     'INSIGHTFACE',
     'EAR',
     'MAR',
-    'MOTION',
-    'SHARPNESS',
-    'RANKING',
     'VAD',
     'FFMPEG',
 

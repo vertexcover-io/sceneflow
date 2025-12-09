@@ -5,218 +5,31 @@ cut points in videos using multi-stage analysis.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 
 from sceneflow.shared.config import RankingConfig
-from sceneflow.detection import EnergyRefiner, find_clean_ending_by_silence
 from sceneflow.shared.exceptions import NoValidFramesError
-from sceneflow.selection import LLMFrameSelector
-from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
 from sceneflow.core import CutPointRanker
-from sceneflow.detection import SpeechDetector
 from sceneflow.utils.video import (
     is_url,
     download_video,
     cleanup_downloaded_video,
     get_video_duration,
 )
+from sceneflow.api._internal import (
+    detect_speech_end,
+    rank_frames,
+    select_best_with_llm,
+    upload_to_airtable as upload_results_to_airtable,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _detect_speech_end(
-    video_path: str,
-    use_energy_refinement: bool,
-    energy_threshold_db: float,
-    energy_lookback_frames: int,
-    use_silence_cleaning: bool = False,
-    incomplete_threshold: float = 0.5,
-) -> Tuple[float, List[Dict[str, float]]]:
-    """
-    Detect when speech ends in video using VAD and optional refinements.
-
-    Args:
-        video_path: Path to video file
-        use_energy_refinement: Whether to refine with energy analysis
-        energy_threshold_db: Energy drop threshold in dB
-        energy_lookback_frames: Frames to search backward
-        use_silence_cleaning: Whether to use silence-based cleaning to remove interruptions
-        incomplete_threshold: Maximum gap to consider segment incomplete (for silence cleaning)
-
-    Returns:
-        Tuple of (speech_end_time, vad_segments)
-    """
-    logger.info("Stage 1: Detecting speech end time...")
-    detector = SpeechDetector()
-
-    vad_speech_end_time, vad_timestamps = detector.get_speech_timestamps(video_path)
-    logger.info("VAD detected speech end at: %.4fs", vad_speech_end_time)
-
-    speech_end_time = vad_speech_end_time
-
-    # Apply refinements in sequence: silence cleaning first, then energy refinement
-    if use_silence_cleaning and use_energy_refinement:
-        logger.info("Both silence cleaning and energy refinement enabled - applying in sequence")
-
-    # Apply silence-based cleaning first if enabled
-    if use_silence_cleaning and vad_timestamps:
-        logger.info("Stage 1.5a: Applying silence-based cleaning to remove interruptions...")
-        video_duration = get_video_duration(video_path)
-        cleaned_end_time = find_clean_ending_by_silence(
-            vad_timestamps,
-            video_duration,
-            incomplete_threshold=incomplete_threshold
-        )
-
-        if cleaned_end_time != vad_speech_end_time:
-            logger.info(
-                "Silence cleaning adjusted speech end from %.4fs to %.4fs (%.2fs earlier)",
-                vad_speech_end_time,
-                cleaned_end_time,
-                vad_speech_end_time - cleaned_end_time
-            )
-            speech_end_time = cleaned_end_time
-        else:
-            logger.info("Silence cleaning: No adjustment needed")
-
-    # Apply energy refinement if enabled (operates on silence-cleaned timestamp if both are enabled)
-    if use_energy_refinement:
-        stage_label = "Stage 1.5b" if use_silence_cleaning else "Stage 1.5"
-        base_time_desc = "silence-cleaned" if use_silence_cleaning else "VAD-detected"
-        logger.info(f"{stage_label}: Refining {base_time_desc} speech end time with energy analysis...")
-
-        refiner = EnergyRefiner(
-            threshold_db=energy_threshold_db,
-            lookback_frames=energy_lookback_frames
-        )
-        result = refiner.refine_speech_end(
-            speech_end_time,
-            video_path
-        )
-
-        speech_end_time = result.refined_timestamp
-
-        if result.frames_adjusted > 0:
-            logger.info(
-                "Energy refinement adjusted timestamp by %d frames",
-                result.frames_adjusted
-            )
-        else:
-            logger.info("Energy refinement: No adjustment needed")
-
-    return speech_end_time, vad_timestamps
-
-
-def _rank_frames(
-    video_path: str,
-    speech_end_time: float,
-    duration: float,
-    config: Optional[RankingConfig],
-    sample_rate: int,
-    return_internals: bool = False
-) -> Tuple[List[RankedFrame], Optional[List[FrameFeatures]], Optional[List[FrameScore]]]:
-    """Rank frames after speech ends."""
-    logger.info("Stage 2: Ranking frames based on visual quality...")
-    logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
-
-    ranker = CutPointRanker(config)
-
-    if return_internals:
-        ranked_frames, features, scores = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-            return_internals=True
-        )
-        return ranked_frames, features, scores
-    else:
-        ranked_frames = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-        )
-        return ranked_frames, None, None
-
-
-def _select_best_with_llm(
-    video_path: str,
-    ranked_frames: List[RankedFrame],
-    speech_end_time: float,
-    duration: float,
-    scores: List[FrameScore],
-    features: List[FrameFeatures],
-    openai_api_key: Optional[str]
-) -> RankedFrame:
-    """Use LLM to select best frame from top candidates."""
-    if len(ranked_frames) < 2:
-        return ranked_frames[0]
-    try:
-        selector = LLMFrameSelector(api_key=openai_api_key)
-        return selector.select_best_frame(
-            video_path=video_path,
-            ranked_frames=ranked_frames,
-            speech_end_time=speech_end_time,
-            video_duration=duration,
-        )
-    except Exception as e:
-        logger.warning("LLM selection failed: %s, using top result", e)
-        return ranked_frames[0]
-
-
-def _upload_to_airtable(
-    video_path: str,
-    best_frame: RankedFrame,
-    scores: List[FrameScore],
-    features: List[FrameFeatures],
-    speech_end_time: float,
-    duration: float,
-    config: Optional[RankingConfig],
-    sample_rate: int,
-    airtable_access_token: Optional[str],
-    airtable_base_id: Optional[str],
-    airtable_table_name: Optional[str]
-) -> str:
-    """Upload analysis results to Airtable."""
-    from sceneflow.integration import upload_to_airtable as airtable_upload
-
-    best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
-    best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
-
-    if not best_score or not best_features:
-        raise RuntimeError("Could not upload to Airtable - missing data")
-
-    config_dict = {
-        "sample_rate": sample_rate,
-        "weights": {
-            "eye": config.eye_weight if config else 0.4,
-            "mouth": config.mouth_weight if config else 0.6,
-        }
-    }
-
-    record_id = airtable_upload(
-        video_path=video_path,
-        best_frame=best_frame,
-        frame_score=best_score,
-        frame_features=best_features,
-        speech_end_time=speech_end_time,
-        duration=duration,
-        config_dict=config_dict,
-        access_token=airtable_access_token,
-        base_id=airtable_base_id,
-        table_name=airtable_table_name
-    )
-    return record_id
-
-
-
 
 
 def get_cut_frame(
     source: str,
     config: Optional[RankingConfig] = None,
-    sample_rate: int = 2,
+    sample_rate: int = 1,
     upload_to_airtable: bool = False,
     airtable_access_token: Optional[str] = None,
     airtable_base_id: Optional[str] = None,
@@ -226,12 +39,9 @@ def get_cut_frame(
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
-    use_silence_cleaning: bool = False,
-    incomplete_threshold: float = 0.5,
     disable_visual_analysis: bool = False,
 ) -> float:
-    """
-    Get the single best cut point timestamp for a video.
+    """Get the single best cut point timestamp for a video.
 
     Args:
         source: Video file path or direct video URL
@@ -246,8 +56,6 @@ def get_cut_frame(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
-        use_silence_cleaning: If True, removes incomplete speech segments at end
-        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
         disable_visual_analysis: If True, skips visual ranking and returns speech end time
 
     Returns:
@@ -265,16 +73,13 @@ def get_cut_frame(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, _ = _detect_speech_end(
+        speech_end_time, visual_search_end_time, _ = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
             energy_lookback_frames,
-            use_silence_cleaning,
-            incomplete_threshold,
         )
 
-        # If visual analysis is disabled, return speech end time directly
         if disable_visual_analysis:
             logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
             return speech_end_time
@@ -282,12 +87,13 @@ def get_cut_frame(
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable
 
-        ranked_frames, features, scores = _rank_frames(
+        ranked_frames, features, scores = rank_frames(
             video_path=video_path,
             speech_end_time=speech_end_time,
             duration=duration,
             config=config,
             sample_rate=sample_rate,
+            visual_search_end_time=visual_search_end_time,
             return_internals=need_internals
         )
 
@@ -297,13 +103,13 @@ def get_cut_frame(
         best_frame = ranked_frames[0]
 
         if use_llm_selection and features and scores:
-            best_frame = _select_best_with_llm(
+            best_frame = select_best_with_llm(
                 video_path, ranked_frames, speech_end_time,
                 duration, scores, features, openai_api_key
             )
 
         if upload_to_airtable and features and scores:
-            _upload_to_airtable(
+            upload_results_to_airtable(
                 video_path, best_frame, scores, features,
                 speech_end_time, duration, config, sample_rate,
                 airtable_access_token, airtable_base_id, airtable_table_name
@@ -321,7 +127,7 @@ def get_ranked_cut_frames(
     source: str,
     n: int = 5,
     config: Optional[RankingConfig] = None,
-    sample_rate: int = 2,
+    sample_rate: int = 1,
     upload_to_airtable: bool = False,
     airtable_access_token: Optional[str] = None,
     airtable_base_id: Optional[str] = None,
@@ -329,12 +135,9 @@ def get_ranked_cut_frames(
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
-    use_silence_cleaning: bool = False,
-    incomplete_threshold: float = 0.5,
     disable_visual_analysis: bool = False,
 ) -> List[float]:
-    """
-    Get the top N best cut point timestamps for a video.
+    """Get the top N best cut point timestamps for a video.
 
     Args:
         source: Video file path or direct video URL
@@ -348,8 +151,6 @@ def get_ranked_cut_frames(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
-        use_silence_cleaning: If True, removes incomplete speech segments at end
-        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
         disable_visual_analysis: If True, skips visual ranking and returns speech end time only
 
     Returns:
@@ -370,28 +171,26 @@ def get_ranked_cut_frames(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, _ = _detect_speech_end(
+        speech_end_time, visual_search_end_time, _ = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
             energy_lookback_frames,
-            use_silence_cleaning,
-            incomplete_threshold,
         )
 
-        # If visual analysis is disabled, return speech end time only
         if disable_visual_analysis:
             logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
             return [speech_end_time]
 
         duration = get_video_duration(video_path)
 
-        ranked_frames, features, scores = _rank_frames(
+        ranked_frames, features, scores = rank_frames(
             video_path=video_path,
             speech_end_time=speech_end_time,
             duration=duration,
             config=config,
             sample_rate=sample_rate,
+            visual_search_end_time=visual_search_end_time,
             return_internals=upload_to_airtable
         )
 
@@ -399,7 +198,7 @@ def get_ranked_cut_frames(
             raise NoValidFramesError("No valid frames found for ranking")
 
         if upload_to_airtable and features and scores:
-            _upload_to_airtable(
+            upload_results_to_airtable(
                 video_path, ranked_frames[0], scores, features,
                 speech_end_time, duration, config, sample_rate,
                 airtable_access_token, airtable_base_id, airtable_table_name
@@ -418,7 +217,7 @@ def cut_video(
     source: str,
     output_path: str,
     config: Optional[RankingConfig] = None,
-    sample_rate: int = 2,
+    sample_rate: int = 1,
     save_frames: bool = False,
     save_logs: bool = False,
     upload_to_airtable: bool = False,
@@ -430,12 +229,9 @@ def cut_video(
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
-    use_silence_cleaning: bool = False,
-    incomplete_threshold: float = 0.5,
     disable_visual_analysis: bool = False,
 ) -> float:
-    """
-    Cut a video at the optimal point and save the cut video.
+    """Cut a video at the optimal point and save the cut video.
 
     This function finds the best cut point and always saves the cut video.
     Optionally saves annotated frames and detailed logs.
@@ -457,8 +253,6 @@ def cut_video(
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
         energy_lookback_frames: Max frames to search backward from VAD
-        use_silence_cleaning: If True, removes incomplete speech segments at end
-        incomplete_threshold: Max gap to consider segment incomplete (default: 0.5s)
         disable_visual_analysis: If True, skips visual ranking and cuts at speech end time
 
     Returns:
@@ -476,17 +270,13 @@ def cut_video(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        # Stage 1: Detect speech end
-        speech_end_time, vad_timestamps = _detect_speech_end(
+        speech_end_time, visual_search_end_time, vad_timestamps = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
             energy_lookback_frames,
-            use_silence_cleaning,
-            incomplete_threshold
         )
 
-        # If visual analysis is disabled, cut at speech end time
         if disable_visual_analysis:
             logger.info("Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time)
             ranker = CutPointRanker(config)
@@ -496,16 +286,17 @@ def cut_video(
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable
 
-        # Stage 2: Rank frames with save options
         ranker = CutPointRanker(config)
+
+        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
 
         rank_kwargs = {
             "video_path": video_path,
             "start_time": speech_end_time,
-            "end_time": duration,
+            "end_time": end_time,
             "sample_rate": sample_rate,
             "save_frames": save_frames,
-            "save_video": not use_llm_selection,  # Save now if not using LLM, save later if using LLM
+            "save_video": not use_llm_selection,
             "output_path": output_path if not use_llm_selection else None,
         }
 
@@ -528,20 +319,17 @@ def cut_video(
 
         best_frame = ranked_frames[0]
 
-        # Stage 3: Optional LLM selection
         if use_llm_selection and features and scores:
-            best_frame = _select_best_with_llm(
+            best_frame = select_best_with_llm(
                 video_path, ranked_frames, speech_end_time,
                 duration, scores, features, openai_api_key
             )
 
-        # Save video with LLM-selected timestamp (only when using LLM selection)
         if use_llm_selection:
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output_path)
 
-        # Upload to Airtable if requested
         if upload_to_airtable and features and scores:
-            _upload_to_airtable(
+            upload_results_to_airtable(
                 video_path, best_frame, scores, features,
                 speech_end_time, duration, config, sample_rate,
                 airtable_access_token, airtable_base_id, airtable_table_name

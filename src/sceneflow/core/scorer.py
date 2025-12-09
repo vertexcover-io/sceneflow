@@ -175,49 +175,40 @@ class FrameScorer:
 
     def _score_eye(self, ear: float) -> float:
         """
-        Score eye openness. Best score when EAR is in normal range.
-        
-        - EAR < 0.2: Blink (bad) -> low score
-        - EAR 0.25-0.35: Normal (good) -> high score  
-        - EAR > 0.4: Wide eyes (slightly bad) -> medium score
+        Score eye openness - ONLY accept frames with eyes fully open.
+
+        - EAR 0.25-0.32: Eyes fully open (BEST) -> score 1.0
+        - All other values: REJECTED -> score 0.0
+
+        This ensures only frames with properly open eyes are considered.
         """
-        if ear < EAR.MIN_VALID:
+        # Reject invalid values
+        if ear < EAR.MIN_VALID or ear > EAR.MAX_VALID:
             return 0.0
-        
-        # Normal range gets score 1.0
+
+        # Only accept eyes fully open in normal range
         if EAR.NORMAL_MIN <= ear <= EAR.NORMAL_MAX:
             return 1.0
-        
-        # Below normal (approaching blink)
-        if ear < EAR.NORMAL_MIN:
-            # Linear interpolation from 0 at MIN_VALID to 1 at NORMAL_MIN
-            return (ear - EAR.MIN_VALID) / (EAR.NORMAL_MIN - EAR.MIN_VALID)
-        
-        # Above normal (wide eyes) - less penalty than blinks
-        if ear > EAR.NORMAL_MAX:
-            # Gradual decrease, but not as severe
-            excess = ear - EAR.NORMAL_MAX
-            return max(0.5, 1.0 - excess * 2)
-        
-        return 1.0
+
+        # Reject everything else (squinting, blinking, too wide)
+        return 0.0
 
     def _score_mouth(self, mar: float) -> float:
         """
-        Score mouth openness. Best score when mouth is closed.
-        
-        - MAR < 0.15: Closed mouth (best) -> score 1.0
-        - MAR 0.15-0.30: Slightly open -> decreasing score
-        - MAR > 0.30: Open/talking (bad) -> low score
+        Score mouth openness - ONLY accept frames with mouth closed.
+
+        - MAR 0.20-0.35: Mouth closed (BEST) -> score 1.0
+        - All other values: REJECTED -> score 0.0
+
+        This ensures only frames with closed mouth are considered.
         """
-        if mar <= MAR.CLOSED_MOUTH_MAX:
+        # Reject invalid values
+        if mar < MAR.MIN_VALID or mar > MAR.MAX_VALID:
+            return 0.0
+
+        # Only accept closed mouth range
+        if MAR.CLOSED_MIN <= mar <= MAR.CLOSED_MAX:
             return 1.0
-        
-        if mar <= MAR.SLIGHTLY_OPEN_MAX:
-            # Linear decrease from 1.0 to 0.5
-            ratio = (mar - MAR.CLOSED_MOUTH_MAX) / (MAR.SLIGHTLY_OPEN_MAX - MAR.CLOSED_MOUTH_MAX)
-            return 1.0 - (ratio * 0.5)
-        
-        # Open mouth - heavy penalty
-        # Score decreases from 0.5 towards 0 as MAR increases
-        excess = mar - MAR.SLIGHTLY_OPEN_MAX
-        return max(0.0, 0.5 - excess * 2)
+
+        # Reject everything else (slightly open, talking, yawning)
+        return 0.0

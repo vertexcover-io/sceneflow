@@ -165,8 +165,6 @@ print(f"Best cut point: {best_cut.timestamp:.2f}s (score: {best_cut.score:.4f})"
 | `energy_threshold_db` | float | 8.0 | All | Minimum dB drop for refinement |
 | `energy_lookback_frames` | int | 20 | All | Max frames to search backward |
 | `disable_visual_analysis` | bool | False | All | Skip visual ranking, use speech end only |
-| `use_silence_cleaning` | bool | False | All | Remove incomplete speech segments |
-| `incomplete_threshold` | float | 0.5 | All | Max gap for incomplete segments (seconds) |
 | `openai_api_key` | str | None | All | OpenAI API key (or use env var) |
 | `airtable_access_token` | str | None | All | Airtable token (or use env var) |
 | `airtable_base_id` | str | None | All | Airtable base ID (or use env var) |

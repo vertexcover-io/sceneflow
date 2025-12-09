@@ -79,7 +79,7 @@ class FeatureExtractor:
                 allowed_modules=['detection', 'landmark_2d_106'],
                 providers=['CPUExecutionProvider']
             )
-            self.app.prepare(ctx_id=-1, det_size=INSIGHTFACE.DEFAULT_DET_SIZE)
+            self.app.prepare(ctx_id=-1, det_size=(INSIGHTFACE.DEFAULT_DET_SIZE.width, INSIGHTFACE.DEFAULT_DET_SIZE.height))
             logger.info("Successfully loaded InsightFace 106-landmark model")
         except Exception as e:
             raise InsightFaceError(
@@ -164,7 +164,16 @@ class FeatureExtractor:
         return ((x1 + x2) / 2, (y1 + y2) / 2)
 
     def _extract_ear(self, face) -> float:
-        """Extract Eye Aspect Ratio from face landmarks."""
+        """
+        Extract Eye Aspect Ratio from face landmarks with intelligent handling.
+
+        Calculates EAR for each eye separately. If one eye has an abnormal value
+        (outside valid range), uses only the correct eye's value instead of averaging.
+        This handles cases like partial occlusion, winking, or landmark detection errors.
+
+        Returns:
+            Average EAR if both eyes valid, single eye EAR if one invalid, DEFAULT if both invalid
+        """
         if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
             return EAR.DEFAULT
 
@@ -179,7 +188,25 @@ class FeatureExtractor:
         left_ear = calculate_ear(left_eye)
         right_ear = calculate_ear(right_eye)
 
-        return (left_ear + right_ear) / 2.0
+        # Intelligent handling: use only valid values
+        left_valid = left_ear != EAR.DEFAULT
+        right_valid = right_ear != EAR.DEFAULT
+
+        if left_valid and right_valid:
+            # Both eyes valid - use average
+            return (left_ear + right_ear) / 2.0
+        elif left_valid:
+            # Only left eye valid - use it
+            logger.debug(f"Using only left eye EAR: {left_ear:.4f} (right eye invalid)")
+            return left_ear
+        elif right_valid:
+            # Only right eye valid - use it
+            logger.debug(f"Using only right eye EAR: {right_ear:.4f} (left eye invalid)")
+            return right_ear
+        else:
+            # Both invalid - return default
+            logger.debug("Both eyes have invalid EAR values")
+            return EAR.DEFAULT
 
     def _extract_mar(self, face) -> float:
         """Extract Mouth Aspect Ratio from face landmarks."""

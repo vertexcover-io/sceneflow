@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
+import numpy as np
 
 from sceneflow.shared.config import RankingConfig
 from sceneflow.shared.exceptions import NoValidFramesError
@@ -13,6 +14,7 @@ from sceneflow.extraction import FeatureExtractor
 from sceneflow.shared.models import FrameFeatures, FrameScore, RankedFrame
 from sceneflow.core.scorer import FrameScorer
 from sceneflow.utils.video import VideoCapture, get_video_properties, cut_video
+from sceneflow.shared.constants import INSIGHTFACE
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,7 @@ class CutPointRanker:
         # Optional outputs
         if save_frames:
             self._save_ranked_frames(video_path, ranked_frames)
+            self._save_scores_txt(video_path, ranked_frames, features, scores)
 
         if save_logs:
             self._save_frame_logs(video_path, ranked_frames, features, scores, vad_timestamps)
@@ -192,7 +195,7 @@ class CutPointRanker:
         return features
 
     def _save_ranked_frames(self, video_path: str, ranked_frames: List[RankedFrame]) -> None:
-        """Save annotated frames."""
+        """Save annotated frames with landmarks color-coded."""
         video_base_name = Path(video_path).stem
         output_dir = Path("output") / video_base_name
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -207,14 +210,140 @@ class CutPointRanker:
                 if not ret:
                     continue
 
+                # Annotate frame with landmarks
+                annotated_frame = self._draw_landmarks(frame)
+
                 output_filename = (
                     f"rank_{ranked_frame.rank:03d}_"
                     f"frame_{ranked_frame.frame_index}_"
                     f"timestamp_{ranked_frame.timestamp:.2f}.jpg"
                 )
-                cv2.imwrite(str(output_dir / output_filename), frame)
+                cv2.imwrite(str(output_dir / output_filename), annotated_frame)
 
         logger.info("Saved frames to: %s", output_dir)
+
+    def _save_scores_txt(
+        self,
+        video_path: str,
+        ranked_frames: List[RankedFrame],
+        features: List[FrameFeatures],
+        scores: List[FrameScore]
+    ) -> None:
+        """Save detailed scores for all frames to scores.txt file."""
+        video_base_name = Path(video_path).stem
+        output_dir = Path("output") / video_base_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create lookup dictionaries
+        frame_to_features = {f.frame_index: f for f in features}
+        frame_to_scores = {s.frame_index: s for s in scores}
+        frame_to_rank = {rf.frame_index: rf.rank for rf in ranked_frames}
+
+        scores_file = output_dir / "scores.txt"
+
+        with open(scores_file, 'w') as f:
+            # Write header
+            f.write("=" * 100 + "\n")
+            f.write("DETAILED FRAME SCORES\n")
+            f.write("=" * 100 + "\n\n")
+            f.write(f"Video: {Path(video_path).name}\n")
+            f.write(f"Total frames analyzed: {len(ranked_frames)}\n")
+            f.write(f"Best cut point: Frame {ranked_frames[0].frame_index} at {ranked_frames[0].timestamp:.4f}s (score: {ranked_frames[0].score:.4f})\n")
+            f.write("\n" + "=" * 100 + "\n\n")
+
+            # Write column headers
+            f.write(f"{'Rank':<6} {'Frame':<8} {'Time(s)':<10} {'Final':<8} {'Eye':<8} {'Mouth':<8} {'Sharp':<8} {'Consist':<8} {'EAR':<8} {'MAR':<8} {'Face':<6}\n")
+            f.write("-" * 100 + "\n")
+
+            # Write data for each frame in rank order
+            for ranked_frame in ranked_frames:
+                feature = frame_to_features.get(ranked_frame.frame_index)
+                score = frame_to_scores.get(ranked_frame.frame_index)
+
+                if not feature or not score:
+                    continue
+
+                # Format values
+                rank_str = f"{ranked_frame.rank}"
+                frame_str = f"{ranked_frame.frame_index}"
+                time_str = f"{ranked_frame.timestamp:.4f}"
+                final_str = f"{score.final_score:.4f}"
+                eye_str = f"{score.eye_score:.4f}"
+                mouth_str = f"{score.mouth_score:.4f}"
+                sharp_str = f"{score.visual_sharpness_score:.4f}"
+                consist_str = f"{score.motion_stability_score:.4f}"
+                ear_str = f"{feature.eye_openness:.4f}"
+                mar_str = f"{feature.mouth_openness:.4f}"
+                face_str = "Yes" if feature.face_detected else "No"
+
+                f.write(f"{rank_str:<6} {frame_str:<8} {time_str:<10} {final_str:<8} {eye_str:<8} {mouth_str:<8} {sharp_str:<8} {consist_str:<8} {ear_str:<8} {mar_str:<8} {face_str:<6}\n")
+
+            # Write footer with legend
+            f.write("\n" + "=" * 100 + "\n")
+            f.write("LEGEND:\n")
+            f.write("  Final    = Final weighted score (higher is better)\n")
+            f.write("  Eye      = Eye openness score (1.0 = eyes fully open, 0.0 = blinking/squinting)\n")
+            f.write("  Mouth    = Mouth closed score (1.0 = closed, 0.0 = talking/open)\n")
+            f.write("  Sharp    = Sharpness score (1.0 = sharpest, 0.0 = blurriest)\n")
+            f.write("  Consist  = Consistency score (1.0 = stable, 0.0 = sudden movement)\n")
+            f.write("  EAR      = Eye Aspect Ratio (raw value, 0.25-0.32 = normal)\n")
+            f.write("  MAR      = Mouth Aspect Ratio (raw value, 0.20-0.35 = closed)\n")
+            f.write("  Face     = Whether a face was detected in the frame\n")
+            f.write("=" * 100 + "\n")
+
+        logger.info("Saved detailed scores to: %s", scores_file)
+
+    def _draw_landmarks(self, frame: np.ndarray) -> np.ndarray:
+        """Draw InsightFace 106 landmarks on frame with color coding.
+
+        Colors:
+        - Blue: Eyes (indices 37-48)
+        - Red: Mouth (indices 52-71)
+        - Beige: Other landmarks
+
+        Args:
+            frame: Input frame (BGR format)
+
+        Returns:
+            Frame with landmarks drawn
+        """
+        # Make a copy to avoid modifying original
+        annotated = frame.copy()
+
+        # Get face with landmarks
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        faces = self.extractor.app.get(rgb_frame)
+
+        if not faces:
+            return annotated
+
+        # Use the largest face
+        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+            return annotated
+
+        landmarks = face.landmark_2d_106.astype(int)
+
+        # Define color coding (BGR format for OpenCV)
+        BLUE = (255, 0, 0)      # Eyes
+        RED = (0, 0, 255)       # Mouth
+        BEIGE = (220, 245, 245) # Other landmarks
+
+        # Draw all 106 landmarks with appropriate colors
+        for i, (x, y) in enumerate(landmarks):
+            # Determine color based on index
+            if INSIGHTFACE.LEFT_EYE_START <= i < INSIGHTFACE.LEFT_EYE_END or \
+               INSIGHTFACE.RIGHT_EYE_START <= i < INSIGHTFACE.RIGHT_EYE_END:
+                color = BLUE
+            elif INSIGHTFACE.MOUTH_OUTER_START <= i < INSIGHTFACE.MOUTH_OUTER_END:
+                color = RED
+            else:
+                color = BEIGE
+
+            cv2.circle(annotated, (x, y), 2, color, -1)
+
+        return annotated
 
     def _save_frame_logs(
         self,

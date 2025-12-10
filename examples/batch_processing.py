@@ -10,20 +10,17 @@ This example shows how to:
 
 import logging
 from pathlib import Path
-from sceneflow import cut_video, RankingConfig
+from sceneflow import cut_video
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def main():
     # Configure the folder containing videos
-    video_folder = Path("new_dataset/videos")
+    video_folder = Path("new_dataset/voice_change_videos")
 
     # Common video file extensions
-    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv'}
+    video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"}
 
     # Optional: Customize ranking configuration
     # config = RankingConfig(
@@ -41,8 +38,7 @@ def main():
 
     # Find all video files in the folder
     video_files = [
-        f for f in video_folder.iterdir()
-        if f.is_file() and f.suffix.lower() in video_extensions
+        f for f in video_folder.iterdir() if f.is_file() and f.suffix.lower() in video_extensions
     ]
 
     if not video_files:
@@ -69,26 +65,22 @@ def main():
                 str(video_path),
                 output_path,
                 sample_rate=1,  # Skip every other frame for faster processing
-                save_frames=True,  # Save annotated frames with landmarks
-                save_logs=True
+                save_frames=True,
+                save_logs=True,
+                use_energy_refinement=True,
+                # energy_threshold_db=8.0,
+                # use_llm_selection=True,
+                # disable_visual_analysis=True,
             )
 
-            results.append({
-                'video': video_path.name,
-                'cut_time': best_time,
-                'status': 'success'
-            })
+            results.append({"video": video_path.name, "cut_time": best_time, "status": "success"})
 
             print(f"✓ Success! Best cut point: {best_time:.2f}s")
             print(f"  - Annotated frames saved to: output/{video_path.stem}/")
             print(f"  - Cut video saved to: {output_path}")
 
         except Exception as e:
-            results.append({
-                'video': video_path.name,
-                'error': str(e),
-                'status': 'failed'
-            })
+            results.append({"video": video_path.name, "error": str(e), "status": "failed"})
 
             print(f"✗ Failed: {e}")
 
@@ -99,8 +91,8 @@ def main():
     print("BATCH PROCESSING SUMMARY")
     print("=" * 80)
 
-    successful = [r for r in results if r['status'] == 'success']
-    failed = [r for r in results if r['status'] == 'failed']
+    successful = [r for r in results if r["status"] == "success"]
+    failed = [r for r in results if r["status"] == "failed"]
 
     print(f"Total videos processed: {len(results)}")
     print(f"Successful: {len(successful)}")

@@ -6,7 +6,6 @@ improves maintainability and makes it easier to tune the system.
 """
 
 from dataclasses import dataclass
-from typing import Final
 
 
 @dataclass(frozen=True)
@@ -30,7 +29,7 @@ class VideoConstants:
     JPEG_QUALITY_HIGH: int = 95
 
     # Supported video formats
-    SUPPORTED_EXTENSIONS: tuple = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')
+    SUPPORTED_EXTENSIONS: tuple = (".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm")
 
 
 @dataclass(frozen=True)
@@ -105,8 +104,8 @@ class InsightFaceConstants:
 class FFmpegConstants:
     """FFmpeg command configuration."""
 
-    VIDEO_CODEC: str = 'libx264'
-    AUDIO_CODEC: str = 'aac'
+    VIDEO_CODEC: str = "libx264"
+    AUDIO_CODEC: str = "aac"
     TIMEOUT_SECONDS: int = 300
 
 

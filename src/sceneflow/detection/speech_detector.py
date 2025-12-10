@@ -5,7 +5,7 @@ ends in video or audio files using deep learning-based voice activity detection.
 """
 
 import logging
-from typing import List, Tuple, Union
+from typing import Tuple
 
 import librosa
 import torch
@@ -13,7 +13,6 @@ from silero_vad import load_silero_vad, get_speech_timestamps
 
 from sceneflow.shared.constants import VAD
 from sceneflow.shared.exceptions import VADModelError, AudioLoadError
-from sceneflow.shared.models import SpeechSegment
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +68,14 @@ class SpeechDetector:
         try:
             # Load audio using librosa (handles both audio and video files)
             # Silero VAD expects 16kHz mono audio
-            logger.debug(
-                "Loading audio from %s at %d Hz",
-                file_path,
-                VAD.TARGET_SAMPLE_RATE
-            )
+            logger.debug("Loading audio from %s at %d Hz", file_path, VAD.TARGET_SAMPLE_RATE)
 
-            audio, sr = librosa.load(
-                file_path,
-                sr=VAD.TARGET_SAMPLE_RATE,
-                mono=True
-            )
+            audio, sr = librosa.load(file_path, sr=VAD.TARGET_SAMPLE_RATE, mono=True)
 
             # Convert numpy array to PyTorch tensor
             audio_tensor = torch.from_numpy(audio).float()
 
-            logger.debug(
-                "Audio loaded: %.2f seconds, sample_rate=%d",
-                len(audio) / sr,
-                sr
-            )
+            logger.debug("Audio loaded: %.2f seconds, sample_rate=%d", len(audio) / sr, sr)
 
             return audio_tensor, sr
 
@@ -96,10 +83,7 @@ class SpeechDetector:
             logger.error("Failed to load audio from %s: %s", file_path, e)
             raise AudioLoadError(file_path, str(e)) from e
 
-    def get_speech_end_time(
-        self,
-        file_path: str
-    ) -> Tuple[float, float]:
+    def get_speech_end_time(self, file_path: str) -> Tuple[float, float]:
         """
         Get speech end time using Silero VAD (Voice Activity Detection).
 
@@ -137,7 +121,7 @@ class SpeechDetector:
             logger.debug(
                 "Running VAD with threshold=%.2f, neg_threshold=%.2f",
                 VAD.THRESHOLD,
-                VAD.NEG_THRESHOLD
+                VAD.NEG_THRESHOLD,
             )
 
             speech_timestamps = get_speech_timestamps(
@@ -149,7 +133,7 @@ class SpeechDetector:
                 neg_threshold=VAD.NEG_THRESHOLD,
                 min_silence_duration_ms=VAD.MIN_SILENCE_DURATION_MS,
                 speech_pad_ms=VAD.SPEECH_PAD_MS,
-                time_resolution=VAD.TIME_RESOLUTION
+                time_resolution=VAD.TIME_RESOLUTION,
             )
 
             logger.debug("VAD detected %d speech segments", len(speech_timestamps))
@@ -161,27 +145,18 @@ class SpeechDetector:
 
             # Get the end time of the last speech segment
             last_speech_segment = speech_timestamps[-1]
-            vad_end_time = float(last_speech_segment['end'])
+            vad_end_time = float(last_speech_segment["end"])
 
             logger.info(
-                "Last speech segment: %.3f-%.3fs",
-                last_speech_segment['start'],
-                vad_end_time
+                "Last speech segment: %.3f-%.3fs", last_speech_segment["start"], vad_end_time
             )
 
             # Calculate confidence based on VAD's detection quality
             # Higher confidence if the last segment is well-defined
-            segment_duration = last_speech_segment['end'] - last_speech_segment['start']
-            confidence = min(
-                1.0,
-                segment_duration / VAD.MIN_SEGMENT_DURATION_FOR_FULL_CONFIDENCE
-            )
+            segment_duration = last_speech_segment["end"] - last_speech_segment["start"]
+            confidence = min(1.0, segment_duration / VAD.MIN_SEGMENT_DURATION_FOR_FULL_CONFIDENCE)
 
-            logger.info(
-                "Speech ends at %.3fs (confidence: %.2f)",
-                vad_end_time,
-                confidence
-            )
+            logger.info("Speech ends at %.3fs (confidence: %.2f)", vad_end_time, confidence)
 
             return vad_end_time, float(confidence)
 

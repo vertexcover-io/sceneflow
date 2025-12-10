@@ -100,6 +100,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+]
+
 [tool.hatch.version]
 source = "vcs"
 

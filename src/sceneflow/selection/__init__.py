@@ -7,5 +7,5 @@ the best frame from top candidates.
 from sceneflow.selection.llm_selector import LLMFrameSelector
 
 __all__ = [
-    'LLMFrameSelector',
+    "LLMFrameSelector",
 ]

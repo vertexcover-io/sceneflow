@@ -7,9 +7,6 @@ from typing import Annotated, Optional
 
 import cyclopts
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
-
 from sceneflow.shared.exceptions import VideoDownloadError, VideoNotFoundError
 from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
@@ -28,6 +25,9 @@ from sceneflow.cli._internal import (
     print_results,
     save_json_output,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 app = cyclopts.App(
     name="sceneflow",
@@ -63,7 +63,9 @@ def main(
     ] = None,
     save_logs: Annotated[
         bool,
-        cyclopts.Parameter(help="Save detailed feature extraction and scoring logs to logs directory"),
+        cyclopts.Parameter(
+            help="Save detailed feature extraction and scoring logs to logs directory"
+        ),
     ] = False,
     top_n: Annotated[
         Optional[int],
@@ -89,11 +91,15 @@ def main(
     ] = False,
     energy_threshold_db: Annotated[
         float,
-        cyclopts.Parameter(help="Minimum dB drop to detect speech end for energy refinement (default: 8.0)"),
+        cyclopts.Parameter(
+            help="Minimum dB drop to detect speech end for energy refinement (default: 8.0)"
+        ),
     ] = 8.0,
     energy_lookback_frames: Annotated[
         int,
-        cyclopts.Parameter(help="Maximum frames to search backward from VAD timestamp (default: 20)"),
+        cyclopts.Parameter(
+            help="Maximum frames to search backward from VAD timestamp (default: 20)"
+        ),
     ] = 20,
     disable_visual_analysis: Annotated[
         bool,
@@ -169,15 +175,11 @@ def main(
                 use_llm_selection,
                 no_energy_refinement,
                 energy_threshold_db,
-                energy_lookback_frames
+                energy_lookback_frames,
             )
 
         speech_end_time, confidence = detect_speech_end_cli(
-            video_path,
-            no_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-            verbose
+            video_path, no_energy_refinement, energy_threshold_db, energy_lookback_frames, verbose
         )
 
         if disable_visual_analysis:
@@ -186,12 +188,9 @@ def main(
                 print("Visual analysis disabled - using speech end time")
                 print(f"{'=' * 60}")
 
-            ranked_frames = [RankedFrame(
-                timestamp=speech_end_time,
-                frame_index=0,
-                score=1.0,
-                rank=1
-            )]
+            ranked_frames = [
+                RankedFrame(timestamp=speech_end_time, frame_index=0, score=1.0, rank=1)
+            ]
             ranker = None
         else:
             duration = get_video_duration(video_path)
@@ -210,7 +209,7 @@ def main(
                 output,
                 save_logs,
                 need_internals,
-                verbose
+                verbose,
             )
 
         if not ranked_frames:
@@ -224,30 +223,16 @@ def main(
 
         if use_llm_selection and len(ranked_frames) > 1 and not top_n:
             best_frame = apply_llm_selection_cli(
-                video_path,
-                ranked_frames,
-                speech_end_time,
-                duration,
-                verbose
+                video_path, ranked_frames, speech_end_time, duration, verbose
             )
 
         if save_video and (use_llm_selection or airtable) and not top_n and ranker:
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
-        logger.info(
-            "Best cut point: %.4fs (score: %.4f)",
-            best_frame.timestamp,
-            best_frame.score
-        )
+        logger.info("Best cut point: %.4fs (score: %.4f)", best_frame.timestamp, best_frame.score)
 
         print_results(
-            best_frame,
-            ranked_frames,
-            top_n,
-            verbose,
-            save_frames,
-            save_video,
-            video_path
+            best_frame, ranked_frames, top_n, verbose, save_frames, save_video, video_path
         )
 
         if airtable and not top_n and ranker:
@@ -282,6 +267,7 @@ def main(
                 print(f"Error uploading to Airtable: {e}", file=sys.stderr)
                 if verbose:
                     import traceback
+
                     traceback.print_exc()
 
         if json_output:
@@ -298,7 +284,7 @@ def main(
                 ranker,
                 sample_rate,
                 top_n,
-                verbose
+                verbose,
             )
 
     except KeyboardInterrupt:
@@ -308,6 +294,7 @@ def main(
         print(f"Error: {e}", file=sys.stderr)
         if verbose:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
     finally:

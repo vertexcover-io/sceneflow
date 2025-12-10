@@ -5,7 +5,7 @@ Use the public API functions from sceneflow.api instead.
 """
 
 import logging
-from typing import  List, Optional, Tuple
+from typing import List, Optional
 
 from sceneflow.shared.config import RankingConfig
 from sceneflow.detection import EnergyRefiner
@@ -15,18 +15,18 @@ from sceneflow.selection import LLMFrameSelector
 
 logger = logging.getLogger(__name__)
 
+
 def detect_speech_end(
     video_path: str,
     use_energy_refinement: bool,
     energy_threshold_db: float,
     energy_lookback_frames: int,
-) -> Tuple[float, float]:
+) -> float:
     """
     Detect when speech ends in a video using VAD and optionally refine using energy analysis.
-    
+
     Returns:
         speech_end_time: Final refined speech end time in seconds.
-        visual_search_end_time: Time to stop visual search, or -1 if no refinement.
     """
     logger.info("Stage 1: Detecting speech end time...")
 
@@ -36,7 +36,6 @@ def detect_speech_end(
     logger.info("VAD detected speech end at: %.4f s", vad_end_time)
 
     speech_end_time = vad_end_time
-    pre_refinement_time = vad_end_time
 
     if use_energy_refinement:
         logger.info("Stage 1.5: Refining VAD-detected speech end time with energy analysis...")
@@ -47,22 +46,18 @@ def detect_speech_end(
         )
 
         result = refiner.refine_speech_end(vad_end_time, video_path)
-
-        if result.frames_adjusted > 0:
+        frames_adjusted = result.vad_frame - result.refined_frame
+        if result.vad_frame - result.refined_frame > 0:
             logger.info(
                 "Energy refinement adjusted timestamp by %d frames",
-                result.frames_adjusted,
+                frames_adjusted,
             )
-            pre_refinement_time = vad_end_time
 
         speech_end_time = result.refined_timestamp
     else:
         logger.debug("Energy refinement disabled.")
 
-
-    return speech_end_time, pre_refinement_time
-
-
+    return speech_end_time
 
 
 def select_best_with_llm(
@@ -72,7 +67,7 @@ def select_best_with_llm(
     duration: float,
     scores: List[FrameScore],
     features: List[FrameFeatures],
-    openai_api_key: Optional[str]
+    openai_api_key: Optional[str],
 ) -> RankedFrame:
     """Use LLM to select best frame from top candidates."""
     if len(ranked_frames) < 2:
@@ -101,7 +96,7 @@ def upload_to_airtable(
     sample_rate: int,
     airtable_access_token: Optional[str],
     airtable_base_id: Optional[str],
-    airtable_table_name: Optional[str]
+    airtable_table_name: Optional[str],
 ) -> str:
     """Upload analysis results to Airtable."""
     from sceneflow.integration import upload_to_airtable as airtable_upload
@@ -117,7 +112,7 @@ def upload_to_airtable(
         "weights": {
             "eye": config.eye_weight if config else 0.4,
             "mouth": config.mouth_weight if config else 0.6,
-        }
+        },
     }
 
     record_id = airtable_upload(
@@ -130,6 +125,6 @@ def upload_to_airtable(
         config_dict=config_dict,
         access_token=airtable_access_token,
         base_id=airtable_base_id,
-        table_name=airtable_table_name
+        table_name=airtable_table_name,
     )
     return record_id

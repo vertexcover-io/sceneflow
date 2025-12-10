@@ -37,34 +37,31 @@ from sceneflow.shared.models import (
 
 __all__ = [
     # Configuration
-    'RankingConfig',
-
+    "RankingConfig",
     # Constants
-    'INSIGHTFACE',
-    'EAR',
-    'MAR',
-    'VAD',
-    'FFMPEG',
-
+    "INSIGHTFACE",
+    "EAR",
+    "MAR",
+    "VAD",
+    "FFMPEG",
     # Exceptions
-    'SceneFlowError',
-    'VideoError',
-    'VideoNotFoundError',
-    'VideoOpenError',
-    'VideoDownloadError',
-    'NoValidFramesError',
-    'InsightFaceError',
-    'LandmarkDetectionError',
-    'VADModelError',
-    'AudioLoadError',
-    'NoSpeechDetectedError',
-    'FFmpegNotFoundError',
-    'FFmpegExecutionError',
-    'InvalidConfigError',
-    'AirtableError',
-
+    "SceneFlowError",
+    "VideoError",
+    "VideoNotFoundError",
+    "VideoOpenError",
+    "VideoDownloadError",
+    "NoValidFramesError",
+    "InsightFaceError",
+    "LandmarkDetectionError",
+    "VADModelError",
+    "AudioLoadError",
+    "NoSpeechDetectedError",
+    "FFmpegNotFoundError",
+    "FFmpegExecutionError",
+    "InvalidConfigError",
+    "AirtableError",
     # Models
-    'FrameFeatures',
-    'FrameScore',
-    'RankedFrame',
+    "FrameFeatures",
+    "FrameScore",
+    "RankedFrame",
 ]

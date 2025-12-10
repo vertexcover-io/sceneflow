@@ -7,6 +7,6 @@ like Airtable.
 from sceneflow.integration.airtable import AirtableUploader, upload_to_airtable
 
 __all__ = [
-    'AirtableUploader',
-    'upload_to_airtable',
+    "AirtableUploader",
+    "upload_to_airtable",
 ]

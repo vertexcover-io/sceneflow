@@ -3,7 +3,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class CutPointRanker:
     """
     Ranker for podcast/talking head videos.
-    
+
     Finds frames where:
     - Eyes are open (not blinking)
     - Mouth is closed (not talking)
@@ -32,9 +32,7 @@ class CutPointRanker:
         self.config = config or RankingConfig()
         self.config.validate()
 
-        self.extractor = FeatureExtractor(
-            min_face_confidence=self.config.min_face_confidence
-        )
+        self.extractor = FeatureExtractor(min_face_confidence=self.config.min_face_confidence)
         self.scorer = FrameScorer(self.config)
 
         # Store last analysis internals for debugging/access
@@ -44,7 +42,7 @@ class CutPointRanker:
         logger.debug(
             "Initialized CutPointRanker: eye_weight=%.2f, mouth_weight=%.2f",
             self.config.eye_weight,
-            self.config.mouth_weight
+            self.config.mouth_weight,
         )
 
     def rank_frames(
@@ -57,7 +55,7 @@ class CutPointRanker:
         save_video: bool = False,
         output_path: Optional[str] = None,
         save_logs: bool = False,
-        vad_timestamps: Optional[List[Dict[str, float]]] = None
+        vad_timestamps: Optional[List[Dict[str, float]]] = None,
     ) -> List[RankedFrame]:
         """
         Rank frames in the given time range for optimal cut points.
@@ -78,8 +76,7 @@ class CutPointRanker:
             Access last_features and last_scores attributes for internals.
         """
         logger.info(
-            "Ranking frames in range %.4f-%.4fs (sample_rate=%d)",
-            start_time, end_time, sample_rate
+            "Ranking frames in range %.4f-%.4fs (sample_rate=%d)", start_time, end_time, sample_rate
         )
 
         # Extract features from all frames
@@ -104,7 +101,7 @@ class CutPointRanker:
                 rank=i + 1,
                 frame_index=score.frame_index,
                 timestamp=score.timestamp,
-                score=score.final_score
+                score=score.final_score,
             )
             for i, score in enumerate(sorted_scores)
         ]
@@ -112,7 +109,7 @@ class CutPointRanker:
         logger.info(
             "Best cut point: %.4fs (score: %.3f)",
             ranked_frames[0].timestamp,
-            ranked_frames[0].score
+            ranked_frames[0].score,
         )
 
         # Optional outputs
@@ -133,11 +130,7 @@ class CutPointRanker:
         return ranked_frames
 
     def get_detailed_scores(
-        self,
-        video_path: str,
-        start_time: float,
-        end_time: float,
-        sample_rate: int = 1
+        self, video_path: str, start_time: float, end_time: float, sample_rate: int = 1
     ) -> List[FrameScore]:
         """Get detailed scoring breakdown for all frames."""
         features = self._extract_features(video_path, start_time, end_time, sample_rate)
@@ -147,11 +140,7 @@ class CutPointRanker:
         return sorted(scores, key=lambda x: x.final_score, reverse=True)
 
     def _extract_features(
-        self,
-        video_path: str,
-        start_time: float,
-        end_time: float,
-        sample_rate: int
+        self, video_path: str, start_time: float, end_time: float, sample_rate: int
     ) -> List[FrameFeatures]:
         """Extract all face metrics from frames in the time range."""
         props = get_video_properties(video_path)
@@ -160,10 +149,7 @@ class CutPointRanker:
         start_frame = int(start_time * fps)
         end_frame = int(end_time * fps)
 
-        logger.info(
-            "Extracting features from frames %d to %d",
-            start_frame, end_frame
-        )
+        logger.info("Extracting features from frames %d to %d", start_frame, end_frame)
 
         with VideoCapture(video_path) as cap:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -183,16 +169,18 @@ class CutPointRanker:
                     # Extract all face metrics
                     metrics = self.extractor.extract_face_metrics(frame)
 
-                    features.append(FrameFeatures(
-                        frame_index=current_frame_idx,
-                        timestamp=timestamp,
-                        eye_openness=metrics.ear,
-                        mouth_openness=metrics.mar,
-                        face_detected=metrics.detected,
-                        sharpness=metrics.sharpness,
-                        face_center=metrics.center,
-                        expression_activity=metrics.mar,  # For backward compatibility
-                    ))
+                    features.append(
+                        FrameFeatures(
+                            frame_index=current_frame_idx,
+                            timestamp=timestamp,
+                            eye_openness=metrics.ear,
+                            mouth_openness=metrics.mar,
+                            face_detected=metrics.detected,
+                            sharpness=metrics.sharpness,
+                            face_center=metrics.center,
+                            expression_activity=metrics.mar,  # For backward compatibility
+                        )
+                    )
 
                 current_frame_idx += 1
 
@@ -325,21 +313,23 @@ class CutPointRanker:
         # Use the largest face
         face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
-        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+        if not hasattr(face, "landmark_2d_106") or face.landmark_2d_106 is None:
             return annotated
 
         landmarks = face.landmark_2d_106.astype(int)
 
         # Define color coding (BGR format for OpenCV)
-        BLUE = (255, 0, 0)      # Eyes
-        RED = (0, 0, 255)       # Mouth
-        BEIGE = (220, 245, 245) # Other landmarks
+        BLUE = (255, 0, 0)  # Eyes
+        RED = (0, 0, 255)  # Mouth
+        BEIGE = (220, 245, 245)  # Other landmarks
 
         # Draw all 106 landmarks with appropriate colors
         for i, (x, y) in enumerate(landmarks):
             # Determine color based on index
-            if INSIGHTFACE.LEFT_EYE_START <= i < INSIGHTFACE.LEFT_EYE_END or \
-               INSIGHTFACE.RIGHT_EYE_START <= i < INSIGHTFACE.RIGHT_EYE_END:
+            if (
+                INSIGHTFACE.LEFT_EYE_START <= i < INSIGHTFACE.LEFT_EYE_END
+                or INSIGHTFACE.RIGHT_EYE_START <= i < INSIGHTFACE.RIGHT_EYE_END
+            ):
                 color = BLUE
             elif INSIGHTFACE.MOUTH_OUTER_START <= i < INSIGHTFACE.MOUTH_OUTER_END:
                 color = RED
@@ -356,7 +346,7 @@ class CutPointRanker:
         ranked_frames: List[RankedFrame],
         features: List[FrameFeatures],
         scores: List[FrameScore],
-        vad_timestamps: Optional[List[Dict[str, float]]] = None
+        vad_timestamps: Optional[List[Dict[str, float]]] = None,
     ) -> None:
         """Save detailed analysis logs."""
         video_base_name = Path(video_path).stem
@@ -393,29 +383,25 @@ class CutPointRanker:
             }
 
             output_filename = (
-                f"rank_{ranked_frame.rank:03d}_"
-                f"frame_{ranked_frame.frame_index}.json"
+                f"rank_{ranked_frame.rank:03d}_" f"frame_{ranked_frame.frame_index}.json"
             )
-            with open(output_dir / output_filename, 'w') as f:
+            with open(output_dir / output_filename, "w") as f:
                 json.dump(log_data, f, indent=2)
 
         if vad_timestamps:
             vad_log_data = {
                 "speech_segments": [{"start": seg.start, "end": seg.end} for seg in vad_timestamps],
                 "total_segments": len(vad_timestamps),
-                "speech_end_time": vad_timestamps[-1].end if vad_timestamps else 0.0
+                "speech_end_time": vad_timestamps[-1].end if vad_timestamps else 0.0,
             }
-            with open(output_dir / "vad_timestamps.json", 'w') as f:
+            with open(output_dir / "vad_timestamps.json", "w") as f:
                 json.dump(vad_log_data, f, indent=2)
             logger.info("Saved VAD timestamps with %d segments", len(vad_timestamps))
 
         logger.info("Saved logs to: %s", output_dir)
 
     def _save_cut_video(
-        self,
-        video_path: str,
-        cut_timestamp: float,
-        output_path: Optional[str] = None
+        self, video_path: str, cut_timestamp: float, output_path: Optional[str] = None
     ) -> str:
         """
         Cut video from start to the specified timestamp using FFmpeg.

@@ -14,11 +14,13 @@ cd sceneflow
 ### 2. Install uv (if not already installed)
 
 **Windows (PowerShell):**
+
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
 **macOS/Linux:**
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -119,6 +121,7 @@ git commit -m "docs: update README with new examples"
 ```
 
 Commit message prefixes:
+
 - `feat:` New feature
 - `fix:` Bug fix
 - `docs:` Documentation changes
@@ -134,6 +137,7 @@ git push origin feature/your-feature-name
 ```
 
 Then create a Pull Request on GitHub with:
+
 - Clear description of changes
 - Reference to any related issues
 - Screenshots/examples if applicable
@@ -184,6 +188,7 @@ def my_function(param1: str, param2: int) -> bool:
 ### Speech Detection Features
 
 If adding new speech detection methods:
+
 1. Add method to `SpeechDetector` class in `speech_detector.py`
 2. Ensure it returns `(timestamp, confidence)` tuple
 3. Add documentation and examples
@@ -192,6 +197,7 @@ If adding new speech detection methods:
 ### Visual Analysis Features
 
 If adding new visual metrics:
+
 1. Add extraction logic to `extractors.py`
 2. Add scoring logic to `scorer.py`
 3. Update `FrameFeatures` and `FrameScore` models in `models.py`
@@ -201,6 +207,7 @@ If adding new visual metrics:
 ### CLI Features
 
 If adding CLI options:
+
 1. Add parameter to `main()` function in `cli.py`
 2. Use `cyclopts.Parameter()` for help text
 3. Update README.md with new option
@@ -256,6 +263,7 @@ uv run pytest tests/test_speech_detector.py
 ### Bug Reports
 
 Include:
+
 - Python version (`python --version`)
 - SceneFlow version (`sceneflow --version`)
 - Operating system
@@ -266,6 +274,7 @@ Include:
 ### Feature Requests
 
 Include:
+
 - Clear description of the feature
 - Use case / motivation
 - Example of how it would work

@@ -11,11 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix/timestamps (#1) @amankumarsingh77
 
-
-
 ## [v0.1.8] - 2025-11-24
 
 - No changes
 
 ## [Unreleased]
-

@@ -61,9 +61,7 @@ class UnsupportedFormatError(VideoError):
     def __init__(self, path: str, extension: str):
         self.path = path
         self.extension = extension
-        super().__init__(
-            f"Unsupported video format '{extension}' for file: {path}"
-        )
+        super().__init__(f"Unsupported video format '{extension}' for file: {path}")
 
 
 class FeatureExtractionError(SceneFlowError):
@@ -149,9 +147,7 @@ class WeightSumError(ConfigurationError):
 
     def __init__(self, total: float):
         self.total = total
-        super().__init__(
-            f"Scoring weights must sum to 1.0, got {total:.4f}"
-        )
+        super().__init__(f"Scoring weights must sum to 1.0, got {total:.4f}")
 
 
 class WindowSizeError(ConfigurationError):
@@ -160,9 +156,7 @@ class WindowSizeError(ConfigurationError):
     def __init__(self, window_name: str, size: int):
         self.window_name = window_name
         self.size = size
-        super().__init__(
-            f"{window_name} must be odd, got {size}"
-        )
+        super().__init__(f"{window_name} must be odd, got {size}")
 
 
 class RankingError(SceneFlowError):
@@ -187,9 +181,7 @@ class InsufficientFramesError(RankingError):
     def __init__(self, required: int, available: int):
         self.required = required
         self.available = available
-        super().__init__(
-            f"Insufficient frames: required {required}, available {available}"
-        )
+        super().__init__(f"Insufficient frames: required {required}, available {available}")
 
 
 class SecurityError(SceneFlowError):
@@ -243,9 +235,7 @@ class MissingAPIKeyError(APIError):
     def __init__(self, service: str, env_var: str):
         self.service = service
         self.env_var = env_var
-        super().__init__(
-            f"{service} API key not found. Set {env_var} environment variable."
-        )
+        super().__init__(f"{service} API key not found. Set {env_var} environment variable.")
 
 
 class FFmpegError(SceneFlowError):
@@ -258,9 +248,7 @@ class FFmpegNotFoundError(FFmpegError):
     """Raised when FFmpeg executable is not found."""
 
     def __init__(self):
-        super().__init__(
-            "FFmpeg not found. Please install FFmpeg to use video cutting features."
-        )
+        super().__init__("FFmpeg not found. Please install FFmpeg to use video cutting features.")
 
 
 class FFmpegExecutionError(FFmpegError):

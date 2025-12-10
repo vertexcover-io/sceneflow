@@ -9,10 +9,8 @@ This example shows how to analyze videos from URLs:
 
 import logging
 from sceneflow import get_cut_frame, get_ranked_cut_frames
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def example_single_url():
@@ -78,7 +76,6 @@ def example_ranked_url():
 if __name__ == "__main__":
     print("SceneFlow - URL Download Examples")
     print("=" * 60)
-
 
     print("\n" + "=" * 60)
     print("\nTo run the examples:")

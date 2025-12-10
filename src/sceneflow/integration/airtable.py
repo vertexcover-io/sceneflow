@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 try:
-    from pyairtable import Api, Base, Table
+    from pyairtable import Api, Table
+
     PYAIRTABLE_AVAILABLE = True
 except ImportError:
     PYAIRTABLE_AVAILABLE = False
@@ -31,7 +32,7 @@ class AirtableUploader:
         self,
         access_token: Optional[str] = None,
         base_id: Optional[str] = None,
-        table_name: Optional[str] = None
+        table_name: Optional[str] = None,
     ):
         """
         Initialize Airtable uploader.
@@ -71,7 +72,9 @@ class AirtableUploader:
         self.base = self.api.base(self.base_id)
         self.table: Optional[Table] = None
 
-        logger.info(f"Initialized Airtable uploader for base: {self.base_id}, table: {self.table_name}")
+        logger.info(
+            f"Initialized Airtable uploader for base: {self.base_id}, table: {self.table_name}"
+        )
 
     def ensure_table_schema(self) -> None:
         """
@@ -110,34 +113,34 @@ class AirtableUploader:
                     {
                         "name": "Timestamp",
                         "type": "singleLineText",
-                        "description": "Cut point timestamp in seconds"
+                        "description": "Cut point timestamp in seconds",
                     },
                     {
                         "name": "Raw Video",
                         "type": "multipleAttachments",
-                        "description": "Original input video file"
+                        "description": "Original input video file",
                     },
                     {
                         "name": "Selected Frame Image",
                         "type": "multipleAttachments",
-                        "description": "JPEG image of the best-ranked frame"
+                        "description": "JPEG image of the best-ranked frame",
                     },
                     {
                         "name": "Output Video",
                         "type": "multipleAttachments",
-                        "description": "Cut video from start to optimal timestamp"
+                        "description": "Cut video from start to optimal timestamp",
                     },
                     {
                         "name": "Raw Data",
                         "type": "multilineText",
-                        "description": "Complete JSON with analysis details"
-                    }
+                        "description": "Complete JSON with analysis details",
+                    },
                 ]
 
                 self.table = self.base.create_table(
                     name=self.table_name,
                     fields=fields,
-                    description="SceneFlow video analysis results with cut point detection"
+                    description="SceneFlow video analysis results with cut point detection",
                 )
 
                 logger.info(f"Successfully created table: {self.table_name}")
@@ -154,7 +157,7 @@ class AirtableUploader:
         frame_features: FrameFeatures,
         speech_end_time: float,
         duration: float,
-        config_dict: Dict[str, Any]
+        config_dict: Dict[str, Any],
     ) -> str:
         """
         Upload complete analysis results to Airtable.
@@ -191,22 +194,26 @@ class AirtableUploader:
 
             # Step 3: Read original video
             logger.info("Reading original video...")
-            with open(video_path, 'rb') as f:
+            with open(video_path, "rb") as f:
                 video_bytes = f.read()
 
             # Step 4: Prepare metadata JSON
             metadata = self._prepare_metadata(
-                video_path, best_frame, frame_score, frame_features,
-                speech_end_time, duration, config_dict
+                video_path,
+                best_frame,
+                frame_score,
+                frame_features,
+                speech_end_time,
+                duration,
+                config_dict,
             )
             metadata_json = json.dumps(metadata, indent=2)
 
             # Step 5: Create record with timestamp and metadata
             logger.info("Creating Airtable record...")
-            record = self.table.create({
-                "Timestamp": f"{best_frame.timestamp:.2f}s",
-                "Raw Data": metadata_json
-            })
+            record = self.table.create(
+                {"Timestamp": f"{best_frame.timestamp:.2f}s", "Raw Data": metadata_json}
+            )
             record_id = record["id"]
             logger.info(f"Created record: {record_id}")
 
@@ -217,29 +224,17 @@ class AirtableUploader:
 
             logger.info("Uploading raw video...")
             self.table.upload_attachment(
-                record_id,
-                "Raw Video",
-                video_filename,
-                video_bytes,
-                "video/mp4"
+                record_id, "Raw Video", video_filename, video_bytes, "video/mp4"
             )
 
             logger.info("Uploading frame image...")
             self.table.upload_attachment(
-                record_id,
-                "Selected Frame Image",
-                frame_filename,
-                frame_image_bytes,
-                "image/jpeg"
+                record_id, "Selected Frame Image", frame_filename, frame_image_bytes, "image/jpeg"
             )
 
             logger.info("Uploading cut video...")
             self.table.upload_attachment(
-                record_id,
-                "Output Video",
-                cut_video_filename,
-                cut_video_bytes,
-                "video/mp4"
+                record_id, "Output Video", cut_video_filename, cut_video_bytes, "video/mp4"
             )
 
             logger.info(f"Successfully uploaded analysis to Airtable! Record ID: {record_id}")
@@ -289,7 +284,7 @@ class AirtableUploader:
         frame_features: FrameFeatures,
         speech_end_time: float,
         duration: float,
-        config_dict: Dict[str, Any]
+        config_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Prepare complete metadata JSON for the Raw Data field.
@@ -306,7 +301,7 @@ class AirtableUploader:
                 "source_filename": Path(video_path).name,
                 "duration_seconds": round(duration, 2),
                 "speech_end_time": round(speech_end_time, 2),
-                "analysis_range": f"{speech_end_time:.2f}s - {duration:.2f}s"
+                "analysis_range": f"{speech_end_time:.2f}s - {duration:.2f}s",
             },
             "score_breakdown": {
                 "composite_score": round(frame_score.composite_score, 4),
@@ -318,8 +313,8 @@ class AirtableUploader:
                     "motion_stability": round(frame_score.motion_stability_score, 4),
                     "expression_neutrality": round(frame_score.expression_neutrality_score, 4),
                     "pose_stability": round(frame_score.pose_stability_score, 4),
-                    "visual_sharpness": round(frame_score.visual_sharpness_score, 4)
-                }
+                    "visual_sharpness": round(frame_score.visual_sharpness_score, 4),
+                },
             },
             "raw_features": {
                 "eye_openness": round(frame_features.eye_openness, 4),
@@ -327,9 +322,9 @@ class AirtableUploader:
                 "expression_activity": round(frame_features.expression_activity, 4),
                 "pose_deviation": round(frame_features.pose_deviation, 4),
                 "sharpness": round(frame_features.sharpness, 2),
-                "num_faces": frame_features.num_faces
+                "num_faces": frame_features.num_faces,
             },
-            "config": config_dict
+            "config": config_dict,
         }
 
 
@@ -343,7 +338,7 @@ def upload_to_airtable(
     config_dict: Dict[str, Any],
     access_token: Optional[str] = None,
     base_id: Optional[str] = None,
-    table_name: Optional[str] = None
+    table_name: Optional[str] = None,
 ) -> str:
     """
     Convenience function to upload analysis results to Airtable.
@@ -369,11 +364,5 @@ def upload_to_airtable(
     uploader = AirtableUploader(access_token, base_id, table_name)
     uploader.ensure_table_schema()
     return uploader.upload_analysis(
-        video_path,
-        best_frame,
-        frame_score,
-        frame_features,
-        speech_end_time,
-        duration,
-        config_dict
+        video_path, best_frame, frame_score, frame_features, speech_end_time, duration, config_dict
     )

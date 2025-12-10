@@ -10,10 +10,7 @@ This example shows how to customize the ranking algorithm:
 import logging
 from sceneflow import get_cut_frame, get_ranked_cut_frames, cut_video, RankingConfig
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def example_custom_weights():
@@ -25,11 +22,11 @@ def example_custom_weights():
     video_path = "your_video.mp4"
 
     config = RankingConfig(
-        eye_openness_weight=0.40,          # 40% weight on eyes (default: 30%)
-        motion_stability_weight=0.30,      # 30% weight on motion (default: 25%)
+        eye_openness_weight=0.40,  # 40% weight on eyes (default: 30%)
+        motion_stability_weight=0.30,  # 30% weight on motion (default: 25%)
         expression_neutrality_weight=0.15,  # 15% weight on expression (default: 20%)
-        pose_stability_weight=0.10,        # 10% weight on pose (default: 15%)
-        visual_sharpness_weight=0.05       # 5% weight on sharpness (default: 10%)
+        pose_stability_weight=0.10,  # 10% weight on pose (default: 15%)
+        visual_sharpness_weight=0.05,  # 5% weight on sharpness (default: 10%)
     )
     # Note: Weights must sum to 1.0
 
@@ -72,12 +69,12 @@ def example_save_outputs():
     best_time = cut_video(
         video_path,
         output_path,
-        save_frames=True   # Save frames with InsightFace landmarks
+        save_frames=True,  # Save frames with InsightFace landmarks
     )
 
     print(f"\n✓ Best cut point: {best_time:.2f}s")
-    print(f"\nOutputs saved:")
-    print(f"  - Annotated frames: output/<video_name>/")
+    print("\nOutputs saved:")
+    print("  - Annotated frames: output/<video_name>/")
     print(f"  - Cut video: {output_path}")
 
 
@@ -94,18 +91,13 @@ def example_combined():
         motion_stability_weight=0.35,
         expression_neutrality_weight=0.15,
         pose_stability_weight=0.10,
-        visual_sharpness_weight=0.05
+        visual_sharpness_weight=0.05,
     )
 
     print("\nGetting top 3 cut points with custom weights...")
-    top_3 = get_ranked_cut_frames(
-        video_path,
-        n=3,
-        config=config,
-        sample_rate=2
-    )
+    top_3 = get_ranked_cut_frames(video_path, n=3, config=config, sample_rate=2)
 
-    print(f"\n✓ Top 3 cut points:")
+    print("\n✓ Top 3 cut points:")
     for i, timestamp in enumerate(top_3, 1):
         print(f"  {i}. {timestamp:.2f}s")
 

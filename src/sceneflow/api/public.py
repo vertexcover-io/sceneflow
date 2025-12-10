@@ -72,7 +72,7 @@ def get_cut_frame(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time = detect_speech_end(
+        speech_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -80,22 +80,22 @@ def get_cut_frame(
         )
 
         if disable_visual_analysis:
-            logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
+            logger.info(
+                "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
+            )
             return speech_end_time
 
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable
 
-        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
-
         logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, end_time)
+        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
 
         ranker = CutPointRanker(config)
         ranked_frames = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
-            end_time=end_time,
+            end_time=duration,
             sample_rate=sample_rate,
         )
 
@@ -113,18 +113,36 @@ def get_cut_frame(
 
         if use_llm_selection and features and scores:
             best_frame = select_best_with_llm(
-                video_path, ranked_frames, speech_end_time,
-                duration, scores, features, openai_api_key
+                video_path,
+                ranked_frames,
+                speech_end_time,
+                duration,
+                scores,
+                features,
+                openai_api_key,
             )
 
         if upload_to_airtable and features and scores:
             upload_results_to_airtable(
-                video_path, best_frame, scores, features,
-                speech_end_time, duration, config, sample_rate,
-                airtable_access_token, airtable_base_id, airtable_table_name
+                video_path,
+                best_frame,
+                scores,
+                features,
+                speech_end_time,
+                duration,
+                config,
+                sample_rate,
+                airtable_access_token,
+                airtable_base_id,
+                airtable_table_name,
             )
 
-        logger.info("Best cut point: %.4fs (frame: %d, score: %.3f)", best_frame.timestamp, best_frame.frame_index, best_frame.score)
+        logger.info(
+            "Best cut point: %.4fs (frame: %d, score: %.3f)",
+            best_frame.timestamp,
+            best_frame.frame_index,
+            best_frame.score,
+        )
         return best_frame.timestamp
 
     finally:
@@ -180,7 +198,7 @@ def get_ranked_cut_frames(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time = detect_speech_end(
+        speech_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -188,21 +206,21 @@ def get_ranked_cut_frames(
         )
 
         if disable_visual_analysis:
-            logger.info("Visual analysis disabled - returning speech end time: %.4fs", speech_end_time)
+            logger.info(
+                "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
+            )
             return [speech_end_time]
 
         duration = get_video_duration(video_path)
 
-        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
-
         logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, end_time)
+        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
 
         ranker = CutPointRanker(config)
         ranked_frames = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
-            end_time=end_time,
+            end_time=duration,
             sample_rate=sample_rate,
         )
 
@@ -218,9 +236,17 @@ def get_ranked_cut_frames(
 
         if upload_to_airtable and features and scores:
             upload_results_to_airtable(
-                video_path, ranked_frames[0], scores, features,
-                speech_end_time, duration, config, sample_rate,
-                airtable_access_token, airtable_base_id, airtable_table_name
+                video_path,
+                ranked_frames[0],
+                scores,
+                features,
+                speech_end_time,
+                duration,
+                config,
+                sample_rate,
+                airtable_access_token,
+                airtable_base_id,
+                airtable_table_name,
             )
 
         top_timestamps = [frame.timestamp for frame in ranked_frames[:n]]
@@ -289,7 +315,7 @@ def cut_video(
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time = detect_speech_end(
+        speech_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -297,7 +323,9 @@ def cut_video(
         )
 
         if disable_visual_analysis:
-            logger.info("Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time)
+            logger.info(
+                "Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time
+            )
             ranker = CutPointRanker(config)
             ranker._save_cut_video(video_path, speech_end_time, output_path=output_path)
             return speech_end_time
@@ -307,12 +335,10 @@ def cut_video(
 
         ranker = CutPointRanker(config)
 
-        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
-
         rank_kwargs = {
             "video_path": video_path,
             "start_time": speech_end_time,
-            "end_time": end_time,
+            "end_time": duration,
             "sample_rate": sample_rate,
             "save_frames": save_frames,
             "save_video": not use_llm_selection,
@@ -324,8 +350,7 @@ def cut_video(
 
         if need_internals:
             ranked_frames, features, scores = ranker.rank_frames(
-                **rank_kwargs,
-                return_internals=True
+                **rank_kwargs, return_internals=True
             )
         else:
             ranked_frames = ranker.rank_frames(**rank_kwargs)
@@ -339,8 +364,13 @@ def cut_video(
 
         if use_llm_selection and features and scores:
             best_frame = select_best_with_llm(
-                video_path, ranked_frames, speech_end_time,
-                duration, scores, features, openai_api_key
+                video_path,
+                ranked_frames,
+                speech_end_time,
+                duration,
+                scores,
+                features,
+                openai_api_key,
             )
 
         if use_llm_selection:
@@ -348,12 +378,25 @@ def cut_video(
 
         if upload_to_airtable and features and scores:
             upload_results_to_airtable(
-                video_path, best_frame, scores, features,
-                speech_end_time, duration, config, sample_rate,
-                airtable_access_token, airtable_base_id, airtable_table_name
+                video_path,
+                best_frame,
+                scores,
+                features,
+                speech_end_time,
+                duration,
+                config,
+                sample_rate,
+                airtable_access_token,
+                airtable_base_id,
+                airtable_table_name,
             )
 
-        logger.info("Best cut point: %.4fs (frame: %d, score: %.3f)", best_frame.timestamp, best_frame.frame_index, best_frame.score)
+        logger.info(
+            "Best cut point: %.4fs (frame: %d, score: %.3f)",
+            best_frame.timestamp,
+            best_frame.frame_index,
+            best_frame.score,
+        )
         return best_frame.timestamp
 
     finally:

@@ -13,8 +13,7 @@ Example:
 """
 
 import logging
-from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple
 
 import cv2
 import numpy as np
@@ -34,9 +33,6 @@ from sceneflow.shared.models import FaceMetrics
 logger = logging.getLogger(__name__)
 
 
-
-
-
 # Landmark indices for 106-point model
 LEFT_EYE_INDICES = list(range(INSIGHTFACE.LEFT_EYE_START, INSIGHTFACE.LEFT_EYE_END))
 RIGHT_EYE_INDICES = list(range(INSIGHTFACE.RIGHT_EYE_START, INSIGHTFACE.RIGHT_EYE_END))
@@ -46,7 +42,7 @@ MOUTH_OUTER_INDICES = list(range(INSIGHTFACE.MOUTH_OUTER_START, INSIGHTFACE.MOUT
 class FeatureExtractor:
     """
     Extracts facial features for podcast/talking head cut point detection.
-    
+
     Extracts:
     - Eye Aspect Ratio (EAR) - detect blinks
     - Mouth Aspect Ratio (MAR) - detect talking
@@ -70,10 +66,12 @@ class FeatureExtractor:
 
         try:
             self.app = FaceAnalysis(
-                allowed_modules=['detection', 'landmark_2d_106'],
-                providers=['CPUExecutionProvider']
+                allowed_modules=["detection", "landmark_2d_106"], providers=["CPUExecutionProvider"]
             )
-            self.app.prepare(ctx_id=-1, det_size=(INSIGHTFACE.DEFAULT_DET_SIZE.width, INSIGHTFACE.DEFAULT_DET_SIZE.height))
+            self.app.prepare(
+                ctx_id=-1,
+                det_size=(INSIGHTFACE.DEFAULT_DET_SIZE.width, INSIGHTFACE.DEFAULT_DET_SIZE.height),
+            )
             logger.info("Successfully loaded InsightFace 106-landmark model")
         except Exception as e:
             raise InsightFaceError(
@@ -96,18 +94,15 @@ class FeatureExtractor:
         # Filter by confidence
         if faces:
             faces = [
-                f for f in faces
-                if hasattr(f, 'det_score') and f.det_score >= self.min_face_confidence
+                f
+                for f in faces
+                if hasattr(f, "det_score") and f.det_score >= self.min_face_confidence
             ]
 
         if not faces:
             logger.debug("No faces detected in frame")
             return FaceMetrics(
-                ear=EAR.DEFAULT,
-                mar=MAR.DEFAULT,
-                sharpness=0.0,
-                center=(0.0, 0.0),
-                detected=False
+                ear=EAR.DEFAULT, mar=MAR.DEFAULT, sharpness=0.0, center=(0.0, 0.0), detected=False
             )
 
         # Use the largest face (primary subject in talking head videos)
@@ -120,13 +115,7 @@ class FeatureExtractor:
         center = self._get_face_center(face.bbox)
 
         logger.debug("Extracted: EAR=%.3f, MAR=%.3f, sharpness=%.1f", ear, mar, sharpness)
-        return FaceMetrics(
-            ear=ear,
-            mar=mar,
-            sharpness=sharpness,
-            center=center,
-            detected=True
-        )
+        return FaceMetrics(ear=ear, mar=mar, sharpness=sharpness, center=center, detected=True)
 
     def _calculate_sharpness(self, frame: np.ndarray, bbox: np.ndarray) -> float:
         """
@@ -134,22 +123,22 @@ class FeatureExtractor:
         Higher value = sharper image, lower = blurry/motion blur.
         """
         x1, y1, x2, y2 = map(int, bbox)
-        
+
         # Add some padding
         h, w = frame.shape[:2]
         pad = 10
         x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
         x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
-        
+
         face_region = frame[y1:y2, x1:x2]
         if face_region.size == 0:
             return 0.0
-        
+
         # Convert to grayscale and compute Laplacian variance
         gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
         variance = laplacian.var()
-        
+
         return float(variance)
 
     def _get_face_center(self, bbox: np.ndarray) -> Tuple[float, float]:
@@ -168,7 +157,7 @@ class FeatureExtractor:
         Returns:
             Average EAR if both eyes valid, single eye EAR if one invalid, DEFAULT if both invalid
         """
-        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+        if not hasattr(face, "landmark_2d_106") or face.landmark_2d_106 is None:
             return EAR.DEFAULT
 
         landmarks = face.landmark_2d_106.astype(int)
@@ -204,7 +193,7 @@ class FeatureExtractor:
 
     def _extract_mar(self, face) -> float:
         """Extract Mouth Aspect Ratio from face landmarks."""
-        if not hasattr(face, 'landmark_2d_106') or face.landmark_2d_106 is None:
+        if not hasattr(face, "landmark_2d_106") or face.landmark_2d_106 is None:
             return MAR.DEFAULT
 
         landmarks = face.landmark_2d_106.astype(int)

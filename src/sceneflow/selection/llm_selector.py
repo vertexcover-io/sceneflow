@@ -15,7 +15,9 @@ class LLMFrameSelector:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
+            raise ValueError(
+                "OpenAI API key not found. Set OPENAI_API_KEY environment variable or pass api_key parameter."
+            )
         self.client = OpenAI(api_key=self.api_key)
 
     def select_best_frame(
@@ -35,12 +37,9 @@ class LLMFrameSelector:
         for idx, frame in enumerate(ranked_frames[:5], 1):
             image_bytes = self._extract_frame_image(video_path, frame.timestamp)
             metadata = self._build_metadata(frame, speech_end_time, video_duration)
-            frames_data.append({
-                "index": idx,
-                "frame": frame,
-                "image_bytes": image_bytes,
-                "metadata": metadata
-            })
+            frames_data.append(
+                {"index": idx, "frame": frame, "image_bytes": image_bytes, "metadata": metadata}
+            )
 
         if not frames_data:
             raise ValueError("No valid frame data for LLM selection")
@@ -52,10 +51,7 @@ class LLMFrameSelector:
         return extract_frame_at_timestamp(video_path, timestamp)
 
     def _build_metadata(
-        self,
-        frame: RankedFrame,
-        speech_end_time: float,
-        video_duration: float
+        self, frame: RankedFrame, speech_end_time: float, video_duration: float
     ) -> dict:
         return {
             "timestamp": round(frame.timestamp, 2),
@@ -64,7 +60,9 @@ class LLMFrameSelector:
             "time_until_end": round(video_duration - frame.timestamp, 2),
         }
 
-    def _build_prompt(self, frames_data: List[dict], video_duration: float, speech_end_time: float) -> str:
+    def _build_prompt(
+        self, frames_data: List[dict], video_duration: float, speech_end_time: float
+    ) -> str:
         prompt_parts = [
             "Select the best cut point from these frames of a talking head video.",
             f"Video: {video_duration:.1f}s, Speech ended: {speech_end_time:.1f}s",
@@ -89,33 +87,24 @@ class LLMFrameSelector:
 
         return "\n".join(prompt_parts)
 
-    def _call_openai_vision(self, frames_data: List[dict], video_duration: float, speech_end_time: float) -> int:
+    def _call_openai_vision(
+        self, frames_data: List[dict], video_duration: float, speech_end_time: float
+    ) -> int:
         prompt = self._build_prompt(frames_data, video_duration, speech_end_time)
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt}
-                ]
-            }
-        ]
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
         for data in frames_data:
-            base64_image = base64.b64encode(data["image_bytes"]).decode('utf-8')
-            messages[0]["content"].append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_image}",
-                    "detail": "low"
+            base64_image = base64.b64encode(data["image_bytes"]).decode("utf-8")
+            messages[0]["content"].append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}", "detail": "low"},
                 }
-            })
+            )
 
         response = self.client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=10,
-            temperature=0
+            model="gpt-4o", messages=messages, max_tokens=10, temperature=0
         )
 
         response_text = response.choices[0].message.content.strip()
@@ -126,8 +115,12 @@ class LLMFrameSelector:
                 logger.debug(f"LLM selected frame {selected_number}")
                 return selected_number - 1
             else:
-                logger.warning(f"LLM returned invalid frame number: {selected_number}, using top algorithmic result")
+                logger.warning(
+                    f"LLM returned invalid frame number: {selected_number}, using top algorithmic result"
+                )
                 return 0
         except ValueError:
-            logger.warning(f"LLM returned non-numeric response: {response_text}, using top algorithmic result")
+            logger.warning(
+                f"LLM returned non-numeric response: {response_text}, using top algorithmic result"
+            )
             return 0

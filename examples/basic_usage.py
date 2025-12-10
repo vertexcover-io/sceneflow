@@ -11,10 +11,7 @@ This example shows how to use SceneFlow to cut a video:
 import logging
 from sceneflow import cut_video
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def basic_example():
@@ -26,7 +23,7 @@ def basic_example():
     - Higher sample rate (1) for more precise frame analysis
     - Full frame annotation and logging
     """
-    video_path = "Video_Path"
+    video_path = "new_dataset/voice_change_videos/video1.mp4"
     output_path = "output/demo.mp4"
 
     print("\nSceneFlow - Advanced Configuration Example")

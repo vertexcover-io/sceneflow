@@ -3,6 +3,7 @@ Energy-based speech end refinement.
 
 Refines VAD timestamps by detecting sudden drops in audio energy levels.
 """
+
 import librosa
 import numpy as np
 import logging
@@ -34,9 +35,7 @@ class EnergyRefiner:
         self.lookback_frames = lookback_frames
         self.min_silence_frames = min_silence_frames
 
-    def refine_speech_end(
-        self, vad_timestamp: float, video_path: str
-    ) -> EnergyRefinementResult:
+    def refine_speech_end(self, vad_timestamp: float, video_path: str) -> EnergyRefinementResult:
         """
         Refine VAD timestamp by finding actual speech end via energy drop.
 
@@ -63,9 +62,7 @@ class EnergyRefiner:
         energy_levels = self._extract_energy_levels(y, sr, fps, start_frame, end_frame)
 
         # Find speech end frame
-        refined_frame = self._find_speech_end_frame(
-            energy_levels, start_frame, end_frame
-        )
+        refined_frame = self._find_speech_end_frame(energy_levels, start_frame, end_frame)
 
         # Calculate metadata
         # If no refinement occurred, use original VAD timestamp to preserve precision
@@ -85,15 +82,12 @@ class EnergyRefiner:
             vad_timestamp=vad_timestamp,
             refined_frame=refined_frame,
             energy_drop_db=energy_drop,
-            frames_adjusted=vad_frame - refined_frame,
-            energy_levels=energy_levels
+            energy_levels=energy_levels,
         )
 
         logger.info(f"VAD timestamp: {vad_timestamp:.4f}s (frame {vad_frame})")
         if refined_frame != vad_frame:
-            logger.info(
-                f"Refined timestamp: {refined_timestamp:.4f}s (frame {refined_frame})"
-            )
+            logger.info(f"Refined timestamp: {refined_timestamp:.4f}s (frame {refined_frame})")
             logger.info(f"Adjusted by {vad_frame - refined_frame} frames backward")
             logger.info(f"Energy drop detected: {energy_drop:.2f} dB")
         else:
@@ -179,9 +173,7 @@ class EnergyRefiner:
             return refined_frame
 
         # No significant drop found, return VAD frame (trust VAD)
-        logger.warning(
-            f"No energy drop >= {self.threshold_db} dB found, using VAD timestamp"
-        )
+        logger.warning(f"No energy drop >= {self.threshold_db} dB found, using VAD timestamp")
         return end_frame
 
     def _verify_continuous_silence(
@@ -189,7 +181,7 @@ class EnergyRefiner:
         energy_levels: dict[int, float],
         drop_frame: int,
         vad_frame: int,
-        max_deviation_db: float = 2.0
+        max_deviation_db: float = 2.0,
     ) -> bool:
         """
         Verify energy STAYS LOW from drop_frame to vad_frame.

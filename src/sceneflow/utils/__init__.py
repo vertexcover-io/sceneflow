@@ -15,11 +15,11 @@ from sceneflow.utils.video import (
 )
 
 __all__ = [
-    'VideoCapture',
-    'get_video_properties',
-    'get_video_duration',
-    'is_url',
-    'download_video',
-    'cleanup_downloaded_video',
-    'validate_video_path',
+    "VideoCapture",
+    "get_video_properties",
+    "get_video_duration",
+    "is_url",
+    "download_video",
+    "cleanup_downloaded_video",
+    "validate_video_path",
 ]

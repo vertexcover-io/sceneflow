@@ -21,7 +21,7 @@ def print_verbose_header(
     use_llm_selection: bool,
     no_energy_refinement: bool,
     energy_threshold_db: float,
-    energy_lookback_frames: int
+    energy_lookback_frames: int,
 ) -> None:
     """Print verbose analysis header."""
     print("=" * 60)
@@ -46,7 +46,7 @@ def detect_speech_end_cli(
     no_energy_refinement: bool,
     energy_threshold_db: float,
     energy_lookback_frames: int,
-    verbose: bool
+    verbose: bool,
 ) -> Tuple[float, float]:
     """Detect speech end time with CLI-specific logging.
 
@@ -71,8 +71,7 @@ def detect_speech_end_cli(
             print("\n[1.5/2] Refining speech end time with energy analysis...")
 
         refiner = EnergyRefiner(
-            threshold_db=energy_threshold_db,
-            lookback_frames=energy_lookback_frames
+            threshold_db=energy_threshold_db, lookback_frames=energy_lookback_frames
         )
         result = refiner.refine_speech_end(vad_speech_end_time, source)
         speech_end_time = result.refined_timestamp
@@ -96,11 +95,13 @@ def rank_frames_cli(
     output: Optional[str],
     save_logs: bool,
     need_internals: bool,
-    verbose: bool
+    verbose: bool,
 ) -> Tuple[List[RankedFrame], CutPointRanker]:
     """Rank frames with CLI-specific logging."""
     if verbose:
-        print(f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s...")
+        print(
+            f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s..."
+        )
 
     ranker = CutPointRanker()
 
@@ -112,7 +113,7 @@ def rank_frames_cli(
         save_frames=save_frames,
         save_video=save_video if not need_internals else False,
         output_path=output,
-        save_logs=save_logs
+        save_logs=save_logs,
     )
 
     return ranked_frames, ranker
@@ -123,7 +124,7 @@ def apply_llm_selection_cli(
     ranked_frames: List[RankedFrame],
     speech_end_time: float,
     duration: float,
-    verbose: bool
+    verbose: bool,
 ) -> RankedFrame:
     """Apply LLM selection with CLI-specific logging."""
     if len(ranked_frames) < 2:
@@ -165,7 +166,7 @@ def print_results(
     verbose: bool,
     save_frames: bool,
     save_video: bool,
-    source: str
+    source: str,
 ) -> None:
     """Print results based on mode (top-n, verbose, or simple)."""
     if top_n is not None:
@@ -242,7 +243,7 @@ def save_json_output(
     ranker: CutPointRanker,
     sample_rate: int,
     top_n: Optional[int],
-    verbose: bool
+    verbose: bool,
 ) -> None:
     """Save detailed analysis to JSON file."""
     json_dir = Path(json_output)
@@ -252,10 +253,7 @@ def save_json_output(
     json_path = json_dir / f"{video_name}_analysis.json"
 
     detailed_scores = ranker.get_detailed_scores(
-        video_path=source,
-        start_time=speech_end_time,
-        end_time=duration,
-        sample_rate=sample_rate
+        video_path=source, start_time=speech_end_time, end_time=duration, sample_rate=sample_rate
     )
 
     json_candidate_count = min(top_n, len(ranked_frames)) if top_n is not None else 10

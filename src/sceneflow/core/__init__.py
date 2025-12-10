@@ -3,4 +3,4 @@
 from sceneflow.core.ranker import CutPointRanker
 from sceneflow.core.scorer import FrameScorer
 
-__all__ = ['CutPointRanker', 'FrameScorer']
+__all__ = ["CutPointRanker", "FrameScorer"]

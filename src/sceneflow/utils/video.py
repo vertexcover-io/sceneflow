@@ -7,7 +7,7 @@ code duplication and provide consistent error handling.
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 from urllib.parse import urlparse
 from contextlib import contextmanager
 
@@ -44,7 +44,7 @@ def is_url(source: str) -> bool:
         >>> is_url("/path/to/video.mp4")
         False
     """
-    return source.startswith(('http://', 'https://'))
+    return source.startswith(("http://", "https://"))
 
 
 def validate_video_path(path: str) -> Path:
@@ -72,7 +72,7 @@ def validate_video_path(path: str) -> Path:
     video_path = Path(path).resolve()
 
     # Check for path traversal
-    if '..' in video_path.parts:
+    if ".." in video_path.parts:
         raise PathTraversalError(str(path))
 
     # Check file exists
@@ -110,7 +110,7 @@ def validate_video_url(url: str) -> str:
         raise InvalidURLError(url, f"Failed to parse URL: {e}")
 
     # Check scheme
-    if parsed.scheme not in ('http', 'https'):
+    if parsed.scheme not in ("http", "https"):
         raise InvalidURLError(url, f"Invalid scheme: {parsed.scheme}")
 
     # Check domain
@@ -118,17 +118,14 @@ def validate_video_url(url: str) -> str:
         raise InvalidURLError(url, "Missing domain")
 
     # Check for suspicious characters
-    suspicious_chars = ['<', '>', '"', "'", '\n', '\r', '\x00']
+    suspicious_chars = ["<", ">", '"', "'", "\n", "\r", "\x00"]
     if any(char in url for char in suspicious_chars):
         raise InvalidURLError(url, "Contains suspicious characters")
 
     # Warn if doesn't look like a video file
     path = parsed.path.lower()
     if not any(path.endswith(ext) for ext in VIDEO.SUPPORTED_EXTENSIONS):
-        logger.warning(
-            "URL does not appear to be a video file: %s",
-            url
-        )
+        logger.warning("URL does not appear to be a video file: %s", url)
 
     return url
 
@@ -161,24 +158,20 @@ def download_video(url: str) -> str:
     temp_dir = Path(tempfile.mkdtemp(prefix="sceneflow_"))
 
     # Extract filename from URL or use default
-    url_path = Path(url.split('?')[0])  # Remove query params
+    url_path = Path(url.split("?")[0])  # Remove query params
     filename = url_path.name if url_path.suffix else "video.mp4"
     output_path = temp_dir / filename
 
     try:
         # Download with streaming
-        response = requests.get(
-            url,
-            stream=True,
-            timeout=VIDEO.DOWNLOAD_TIMEOUT_SECONDS
-        )
+        response = requests.get(url, stream=True, timeout=VIDEO.DOWNLOAD_TIMEOUT_SECONDS)
         response.raise_for_status()
 
         # Get file size if available
-        total_size = int(response.headers.get('content-length', 0))
+        total_size = int(response.headers.get("content-length", 0))
 
         # Write to file
-        with open(output_path, 'wb') as f:
+        with open(output_path, "wb") as f:
             downloaded = 0
             for chunk in response.iter_content(chunk_size=VIDEO.DOWNLOAD_CHUNK_SIZE_BYTES):
                 if chunk:
@@ -193,8 +186,7 @@ def download_video(url: str) -> str:
 
     except requests.exceptions.Timeout:
         raise VideoDownloadError(
-            url,
-            f"Download timed out after {VIDEO.DOWNLOAD_TIMEOUT_SECONDS} seconds"
+            url, f"Download timed out after {VIDEO.DOWNLOAD_TIMEOUT_SECONDS} seconds"
         )
     except requests.exceptions.ConnectionError as e:
         raise VideoDownloadError(url, f"Connection failed: {e}")
@@ -235,10 +227,7 @@ def cleanup_downloaded_video(video_path: str) -> None:
                 temp_dir.rmdir()
                 logger.debug("Deleted temporary directory: %s", temp_dir)
             else:
-                logger.warning(
-                    "Temporary directory not empty, skipping deletion: %s",
-                    temp_dir
-                )
+                logger.warning("Temporary directory not empty, skipping deletion: %s", temp_dir)
 
     except Exception as e:
         logger.warning("Failed to clean up downloaded video: %s", e)
@@ -300,10 +289,7 @@ class VideoCapture:
         """Open video capture."""
         self.cap = cv2.VideoCapture(self.video_path)
         if not self.cap.isOpened():
-            raise VideoOpenError(
-                self.video_path,
-                "VideoCapture.isOpened() returned False"
-            )
+            raise VideoOpenError(self.video_path, "VideoCapture.isOpened() returned False")
         return self.cap
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -341,24 +327,16 @@ def get_video_properties(video_path: str) -> VideoProperties:
         # Validate properties
         if fps <= 0 or frame_count <= 0:
             raise VideoPropertiesError(
-                video_path,
-                f"Invalid fps={fps} or frame_count={frame_count}"
+                video_path, f"Invalid fps={fps} or frame_count={frame_count}"
             )
 
         if width <= 0 or height <= 0:
-            raise VideoPropertiesError(
-                video_path,
-                f"Invalid dimensions: {width}x{height}"
-            )
+            raise VideoPropertiesError(video_path, f"Invalid dimensions: {width}x{height}")
 
         duration = frame_count / fps
 
         return VideoProperties(
-            fps=fps,
-            frame_count=frame_count,
-            duration=duration,
-            width=width,
-            height=height
+            fps=fps, frame_count=frame_count, duration=duration, width=width, height=height
         )
 
 
@@ -386,9 +364,7 @@ def get_video_duration(video_path: str) -> float:
 
 
 def extract_frame(
-    video_path: str,
-    frame_index: int,
-    jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
+    video_path: str, frame_index: int, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
 ) -> bytes:
     """
     Extract a specific frame from video as JPEG bytes.
@@ -415,16 +391,10 @@ def extract_frame(
         ret, frame = cap.read()
 
         if not ret:
-            raise ValueError(
-                f"Failed to extract frame {frame_index} from {video_path}"
-            )
+            raise ValueError(f"Failed to extract frame {frame_index} from {video_path}")
 
         # Encode frame as JPEG
-        success, buffer = cv2.imencode(
-            '.jpg',
-            frame,
-            [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
-        )
+        success, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
 
         if not success:
             raise ValueError("Failed to encode frame as JPEG")
@@ -433,9 +403,7 @@ def extract_frame(
 
 
 def extract_frame_at_timestamp(
-    video_path: str,
-    timestamp: float,
-    jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
+    video_path: str, timestamp: float, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
 ) -> bytes:
     """
     Extract frame at specific timestamp from video as JPEG bytes.
@@ -462,11 +430,7 @@ def extract_frame_at_timestamp(
     return extract_frame(video_path, frame_index, jpeg_quality)
 
 
-def cut_video(
-    video_path: str,
-    cut_timestamp: float,
-    output_path: Optional[str] = None
-) -> str:
+def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] = None) -> str:
     """
     Cut video from start to the specified timestamp using FFmpeg.
 
@@ -505,22 +469,22 @@ def cut_video(
     logger.info("Cutting video from 0.0000s to %.4fs using FFmpeg", cut_timestamp)
 
     cmd = [
-        'ffmpeg',
-        '-i', video_path,
-        '-t', f'{cut_timestamp:.6f}',
-        '-c:v', FFMPEG.VIDEO_CODEC,
-        '-c:a', FFMPEG.AUDIO_CODEC,
-        '-y',
-        str(final_output_path)
+        "ffmpeg",
+        "-i",
+        video_path,
+        "-t",
+        f"{cut_timestamp:.6f}",
+        "-c:v",
+        FFMPEG.VIDEO_CODEC,
+        "-c:a",
+        FFMPEG.AUDIO_CODEC,
+        "-y",
+        str(final_output_path),
     ]
 
     try:
         subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=FFMPEG.TIMEOUT_SECONDS
+            cmd, check=True, capture_output=True, text=True, timeout=FFMPEG.TIMEOUT_SECONDS
         )
         logger.info("Saved cut video (0.0000s - %.4fs) to: %s", cut_timestamp, final_output_path)
         return str(final_output_path)
@@ -529,13 +493,10 @@ def cut_video(
         raise FFmpegNotFoundError()
     except subprocess.TimeoutExpired:
         logger.error("FFmpeg timeout after %d seconds", FFMPEG.TIMEOUT_SECONDS)
-        raise FFmpegExecutionError(
-            ' '.join(cmd),
-            f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
-        )
+        raise FFmpegExecutionError(" ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds")
     except subprocess.CalledProcessError as e:
         logger.error("FFmpeg failed: %s", e.stderr)
-        raise FFmpegExecutionError(' '.join(cmd), e.stderr)
+        raise FFmpegExecutionError(" ".join(cmd), e.stderr)
 
 
 def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
@@ -564,40 +525,37 @@ def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
     from sceneflow.shared.constants import FFMPEG
     from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
 
-    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
         temp_path = temp_file.name
 
     try:
         cmd = [
-            'ffmpeg',
-            '-i', video_path,
-            '-t', f'{cut_timestamp:.6f}',
-            '-c:v', FFMPEG.VIDEO_CODEC,
-            '-c:a', FFMPEG.AUDIO_CODEC,
-            '-y',
-            temp_path
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-t",
+            f"{cut_timestamp:.6f}",
+            "-c:v",
+            FFMPEG.VIDEO_CODEC,
+            "-c:a",
+            FFMPEG.AUDIO_CODEC,
+            "-y",
+            temp_path,
         ]
 
         subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=FFMPEG.TIMEOUT_SECONDS
+            cmd, check=True, capture_output=True, text=True, timeout=FFMPEG.TIMEOUT_SECONDS
         )
 
-        with open(temp_path, 'rb') as f:
+        with open(temp_path, "rb") as f:
             return f.read()
 
     except FileNotFoundError:
         raise FFmpegNotFoundError()
     except subprocess.TimeoutExpired:
-        raise FFmpegExecutionError(
-            ' '.join(cmd),
-            f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
-        )
+        raise FFmpegExecutionError(" ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds")
     except subprocess.CalledProcessError as e:
-        raise FFmpegExecutionError(' '.join(cmd), e.stderr)
+        raise FFmpegExecutionError(" ".join(cmd), e.stderr)
     finally:
         try:
             Path(temp_path).unlink()

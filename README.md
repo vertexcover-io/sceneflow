@@ -150,27 +150,28 @@ print(f"Best cut point: {best_cut.timestamp:.2f}s (score: {best_cut.score:.4f})"
 
 ### Common Parameters
 
-| Parameter | Type | Default | Used By | Description |
-|-----------|------|---------|---------|-------------|
-| `source` | str | required | All | Video file path or URL |
-| `output_path` | str | required | cut_video | Output path for cut video |
-| `n` | int | 5 | get_ranked | Number of timestamps to return |
-| `sample_rate` | int | 2 | All | Process every Nth frame |
-| `save_video` | bool | False | get_cut_frame | Save cut video |
-| `save_frames` | bool | False | All | Save annotated frames |
-| `save_logs` | bool | False | All | Save analysis logs |
-| `upload_to_airtable` | bool | False | All | Upload to Airtable |
-| `use_llm_selection` | bool | False | All | Use GPT-4o for selection |
-| `use_energy_refinement` | bool | True | All | Refine VAD with energy analysis |
-| `energy_threshold_db` | float | 8.0 | All | Minimum dB drop for refinement |
-| `energy_lookback_frames` | int | 20 | All | Max frames to search backward |
-| `disable_visual_analysis` | bool | False | All | Skip visual ranking, use speech end only |
-| `openai_api_key` | str | None | All | OpenAI API key (or use env var) |
-| `airtable_access_token` | str | None | All | Airtable token (or use env var) |
-| `airtable_base_id` | str | None | All | Airtable base ID (or use env var) |
-| `airtable_table_name` | str | None | All | Airtable table name (or use env var) |
+| Parameter                 | Type  | Default  | Used By       | Description                              |
+| ------------------------- | ----- | -------- | ------------- | ---------------------------------------- |
+| `source`                  | str   | required | All           | Video file path or URL                   |
+| `output_path`             | str   | required | cut_video     | Output path for cut video                |
+| `n`                       | int   | 5        | get_ranked    | Number of timestamps to return           |
+| `sample_rate`             | int   | 2        | All           | Process every Nth frame                  |
+| `save_video`              | bool  | False    | get_cut_frame | Save cut video                           |
+| `save_frames`             | bool  | False    | All           | Save annotated frames                    |
+| `save_logs`               | bool  | False    | All           | Save analysis logs                       |
+| `upload_to_airtable`      | bool  | False    | All           | Upload to Airtable                       |
+| `use_llm_selection`       | bool  | False    | All           | Use GPT-4o for selection                 |
+| `use_energy_refinement`   | bool  | True     | All           | Refine VAD with energy analysis          |
+| `energy_threshold_db`     | float | 8.0      | All           | Minimum dB drop for refinement           |
+| `energy_lookback_frames`  | int   | 20       | All           | Max frames to search backward            |
+| `disable_visual_analysis` | bool  | False    | All           | Skip visual ranking, use speech end only |
+| `openai_api_key`          | str   | None     | All           | OpenAI API key (or use env var)          |
+| `airtable_access_token`   | str   | None     | All           | Airtable token (or use env var)          |
+| `airtable_base_id`        | str   | None     | All           | Airtable base ID (or use env var)        |
+| `airtable_table_name`     | str   | None     | All           | Airtable table name (or use env var)     |
 
 **Functions:**
+
 - `get_cut_frame(source, **params)` - Returns best cut timestamp (float)
 - `get_ranked_cut_frames(source, n=5, **params)` - Returns top N timestamps (list)
 - `cut_video(source, output_path, **params)` - Cuts video and returns timestamp (float)
@@ -226,6 +227,7 @@ OPENAI_API_KEY            # OpenAI API key for GPT-4o integration
 ```
 
 Quick setup:
+
 ```bash
 cp .env.example .env
 # Edit .env with your credentials
@@ -241,13 +243,13 @@ Uses Silero VAD (Voice Activity Detection) for accurate speech/silence detection
 
 After identifying speech end, SceneFlow analyzes frames using InsightFace (106-landmark facial detection) and ranks them based on:
 
-| Factor | Weight | Description |
-|--------|--------|-------------|
-| Expression Neutrality | 30% | Calm, neutral facial expressions |
-| Motion Stability | 25% | Minimal optical flow between frames |
-| Eye Openness | 20% | Natural eye openness |
-| Pose Stability | 15% | Steady head position |
-| Visual Sharpness | 10% | Clear frame quality |
+| Factor                | Weight | Description                         |
+| --------------------- | ------ | ----------------------------------- |
+| Expression Neutrality | 30%    | Calm, neutral facial expressions    |
+| Motion Stability      | 25%    | Minimal optical flow between frames |
+| Eye Openness          | 20%    | Natural eye openness                |
+| Pose Stability        | 15%    | Steady head position                |
+| Visual Sharpness      | 10%    | Clear frame quality                 |
 
 When multiple faces are detected, center-weighted averaging prioritizes faces closer to the frame center.
 
@@ -262,6 +264,7 @@ When multiple faces are detected, center-weighted averaging prioritizes faces cl
 ## Examples
 
 Check the `examples/` directory:
+
 - `basic_usage.py` - Simple API usage
 - `custom_config.py` - Custom configuration
 - `ranked_results.py` - Multiple cut points

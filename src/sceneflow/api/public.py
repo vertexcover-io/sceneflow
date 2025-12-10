@@ -18,7 +18,6 @@ from sceneflow.utils.video import (
 )
 from sceneflow.api._internal import (
     detect_speech_end,
-    rank_frames,
     select_best_with_llm,
     upload_to_airtable as upload_results_to_airtable,
 )
@@ -64,16 +63,16 @@ def get_cut_frame(
     logger.info("SceneFlow: Finding optimal cut point")
 
     video_path = source
-    is_downloaded = is_url(source)
+    is_url_source = is_url(source)
 
-    if is_downloaded:
+    if is_url_source:
         logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
     else:
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time, _ = detect_speech_end(
+        speech_end_time, visual_search_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -87,15 +86,25 @@ def get_cut_frame(
         duration = get_video_duration(video_path)
         need_internals = use_llm_selection or upload_to_airtable
 
-        ranked_frames, features, scores = rank_frames(
+        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
+
+        logger.info("Stage 2: Ranking frames based on visual quality...")
+        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, end_time)
+
+        ranker = CutPointRanker(config)
+        ranked_frames = ranker.rank_frames(
             video_path=video_path,
-            speech_end_time=speech_end_time,
-            duration=duration,
-            config=config,
+            start_time=speech_end_time,
+            end_time=end_time,
             sample_rate=sample_rate,
-            visual_search_end_time=visual_search_end_time,
-            return_internals=need_internals
         )
+
+        if need_internals:
+            features = ranker.last_features
+            scores = ranker.last_scores
+        else:
+            features = None
+            scores = None
 
         if not ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
@@ -119,7 +128,7 @@ def get_cut_frame(
         return best_frame.timestamp
 
     finally:
-        if is_downloaded:
+        if is_url_source:
             cleanup_downloaded_video(video_path)
 
 
@@ -162,16 +171,16 @@ def get_ranked_cut_frames(
     logger.info("SceneFlow: Finding top %d cut points", n)
 
     video_path = source
-    is_downloaded = is_url(source)
+    is_url_source = is_url(source)
 
-    if is_downloaded:
+    if is_url_source:
         logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
     else:
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time, _ = detect_speech_end(
+        speech_end_time, visual_search_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -184,15 +193,25 @@ def get_ranked_cut_frames(
 
         duration = get_video_duration(video_path)
 
-        ranked_frames, features, scores = rank_frames(
+        end_time = visual_search_end_time if visual_search_end_time > 0 else duration
+
+        logger.info("Stage 2: Ranking frames based on visual quality...")
+        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, end_time)
+
+        ranker = CutPointRanker(config)
+        ranked_frames = ranker.rank_frames(
             video_path=video_path,
-            speech_end_time=speech_end_time,
-            duration=duration,
-            config=config,
+            start_time=speech_end_time,
+            end_time=end_time,
             sample_rate=sample_rate,
-            visual_search_end_time=visual_search_end_time,
-            return_internals=upload_to_airtable
         )
+
+        if upload_to_airtable:
+            features = ranker.last_features
+            scores = ranker.last_scores
+        else:
+            features = None
+            scores = None
 
         if not ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
@@ -209,7 +228,7 @@ def get_ranked_cut_frames(
         return top_timestamps
 
     finally:
-        if is_downloaded:
+        if is_url_source:
             cleanup_downloaded_video(video_path)
 
 
@@ -261,16 +280,16 @@ def cut_video(
     logger.info("SceneFlow: Cutting video at optimal point")
 
     video_path = source
-    is_downloaded = is_url(source)
+    is_url_source = is_url(source)
 
-    if is_downloaded:
+    if is_url_source:
         logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
     else:
         logger.info("Analyzing local video: %s", source)
 
     try:
-        speech_end_time, visual_search_end_time, vad_timestamps = detect_speech_end(
+        speech_end_time, visual_search_end_time = detect_speech_end(
             video_path,
             use_energy_refinement,
             energy_threshold_db,
@@ -302,7 +321,6 @@ def cut_video(
 
         if save_logs:
             rank_kwargs["save_logs"] = True
-            rank_kwargs["vad_timestamps"] = vad_timestamps
 
         if need_internals:
             ranked_frames, features, scores = ranker.rank_frames(
@@ -339,5 +357,5 @@ def cut_video(
         return best_frame.timestamp
 
     finally:
-        if is_downloaded:
+        if is_url_source:
             cleanup_downloaded_video(video_path)

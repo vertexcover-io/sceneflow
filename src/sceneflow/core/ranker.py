@@ -3,7 +3,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -37,6 +37,10 @@ class CutPointRanker:
         )
         self.scorer = FrameScorer(self.config)
 
+        # Store last analysis internals for debugging/access
+        self.last_features: Optional[List[FrameFeatures]] = None
+        self.last_scores: Optional[List[FrameScore]] = None
+
         logger.debug(
             "Initialized CutPointRanker: eye_weight=%.2f, mouth_weight=%.2f",
             self.config.eye_weight,
@@ -53,9 +57,8 @@ class CutPointRanker:
         save_video: bool = False,
         output_path: Optional[str] = None,
         save_logs: bool = False,
-        vad_timestamps: Optional[List[Dict[str, float]]] = None,
-        return_internals: bool = False
-    ) -> Union[List[RankedFrame], Tuple[List[RankedFrame], List[FrameFeatures], List[FrameScore]]]:
+        vad_timestamps: Optional[List[Dict[str, float]]] = None
+    ) -> List[RankedFrame]:
         """
         Rank frames in the given time range for optimal cut points.
 
@@ -69,10 +72,10 @@ class CutPointRanker:
             output_path: Optional custom path for saved video
             save_logs: If True, save detailed logs
             vad_timestamps: Optional list of VAD speech segments to include in logs
-            return_internals: If True, return (frames, features, scores) tuple
 
         Returns:
-            List of RankedFrame sorted by score (best first), or tuple with internals
+            List of RankedFrame sorted by score (best first).
+            Access last_features and last_scores attributes for internals.
         """
         logger.info(
             "Ranking frames in range %.4f-%.4fs (sample_rate=%d)",
@@ -115,7 +118,7 @@ class CutPointRanker:
         # Optional outputs
         if save_frames:
             self._save_ranked_frames(video_path, ranked_frames)
-            self._save_scores_txt(video_path, ranked_frames, features, scores)
+            # self._save_scores_txt(video_path, ranked_frames, features, scores)
 
         if save_logs:
             self._save_frame_logs(video_path, ranked_frames, features, scores, vad_timestamps)
@@ -123,8 +126,10 @@ class CutPointRanker:
         if save_video and ranked_frames:
             self._save_cut_video(video_path, ranked_frames[0].timestamp, output_path=output_path)
 
-        if return_internals:
-            return ranked_frames, features, scores
+        # Store internals for later access
+        self.last_features = features
+        self.last_scores = scores
+
         return ranked_frames
 
     def get_detailed_scores(
@@ -222,76 +227,76 @@ class CutPointRanker:
 
         logger.info("Saved frames to: %s", output_dir)
 
-    def _save_scores_txt(
-        self,
-        video_path: str,
-        ranked_frames: List[RankedFrame],
-        features: List[FrameFeatures],
-        scores: List[FrameScore]
-    ) -> None:
-        """Save detailed scores for all frames to scores.txt file."""
-        video_base_name = Path(video_path).stem
-        output_dir = Path("output") / video_base_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+    # def _save_scores_txt(
+    #     self,
+    #     video_path: str,
+    #     ranked_frames: List[RankedFrame],
+    #     features: List[FrameFeatures],
+    #     scores: List[FrameScore]
+    # ) -> None:
+    #     """Save detailed scores for all frames to scores.txt file."""
+    #     video_base_name = Path(video_path).stem
+    #     output_dir = Path("output") / video_base_name
+    #     output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create lookup dictionaries
-        frame_to_features = {f.frame_index: f for f in features}
-        frame_to_scores = {s.frame_index: s for s in scores}
-        frame_to_rank = {rf.frame_index: rf.rank for rf in ranked_frames}
+    #     # Create lookup dictionaries
+    #     frame_to_features = {f.frame_index: f for f in features}
+    #     frame_to_scores = {s.frame_index: s for s in scores}
+    #     frame_to_rank = {rf.frame_index: rf.rank for rf in ranked_frames}
 
-        scores_file = output_dir / "scores.txt"
+    #     scores_file = output_dir / "scores.txt"
 
-        with open(scores_file, 'w') as f:
-            # Write header
-            f.write("=" * 100 + "\n")
-            f.write("DETAILED FRAME SCORES\n")
-            f.write("=" * 100 + "\n\n")
-            f.write(f"Video: {Path(video_path).name}\n")
-            f.write(f"Total frames analyzed: {len(ranked_frames)}\n")
-            f.write(f"Best cut point: Frame {ranked_frames[0].frame_index} at {ranked_frames[0].timestamp:.4f}s (score: {ranked_frames[0].score:.4f})\n")
-            f.write("\n" + "=" * 100 + "\n\n")
+    #     with open(scores_file, 'w') as f:
+    #         # Write header
+    #         f.write("=" * 100 + "\n")
+    #         f.write("DETAILED FRAME SCORES\n")
+    #         f.write("=" * 100 + "\n\n")
+    #         f.write(f"Video: {Path(video_path).name}\n")
+    #         f.write(f"Total frames analyzed: {len(ranked_frames)}\n")
+    #         f.write(f"Best cut point: Frame {ranked_frames[0].frame_index} at {ranked_frames[0].timestamp:.4f}s (score: {ranked_frames[0].score:.4f})\n")
+    #         f.write("\n" + "=" * 100 + "\n\n")
 
-            # Write column headers
-            f.write(f"{'Rank':<6} {'Frame':<8} {'Time(s)':<10} {'Final':<8} {'Eye':<8} {'Mouth':<8} {'Sharp':<8} {'Consist':<8} {'EAR':<8} {'MAR':<8} {'Face':<6}\n")
-            f.write("-" * 100 + "\n")
+    #         # Write column headers
+    #         f.write(f"{'Rank':<6} {'Frame':<8} {'Time(s)':<10} {'Final':<8} {'Eye':<8} {'Mouth':<8} {'Sharp':<8} {'Consist':<8} {'EAR':<8} {'MAR':<8} {'Face':<6}\n")
+    #         f.write("-" * 100 + "\n")
 
-            # Write data for each frame in rank order
-            for ranked_frame in ranked_frames:
-                feature = frame_to_features.get(ranked_frame.frame_index)
-                score = frame_to_scores.get(ranked_frame.frame_index)
+    #         # Write data for each frame in rank order
+    #         for ranked_frame in ranked_frames:
+    #             feature = frame_to_features.get(ranked_frame.frame_index)
+    #             score = frame_to_scores.get(ranked_frame.frame_index)
 
-                if not feature or not score:
-                    continue
+    #             if not feature or not score:
+    #                 continue
 
-                # Format values
-                rank_str = f"{ranked_frame.rank}"
-                frame_str = f"{ranked_frame.frame_index}"
-                time_str = f"{ranked_frame.timestamp:.4f}"
-                final_str = f"{score.final_score:.4f}"
-                eye_str = f"{score.eye_score:.4f}"
-                mouth_str = f"{score.mouth_score:.4f}"
-                sharp_str = f"{score.visual_sharpness_score:.4f}"
-                consist_str = f"{score.motion_stability_score:.4f}"
-                ear_str = f"{feature.eye_openness:.4f}"
-                mar_str = f"{feature.mouth_openness:.4f}"
-                face_str = "Yes" if feature.face_detected else "No"
+    #             # Format values
+    #             rank_str = f"{ranked_frame.rank}"
+    #             frame_str = f"{ranked_frame.frame_index}"
+    #             time_str = f"{ranked_frame.timestamp:.4f}"
+    #             final_str = f"{score.final_score:.4f}"
+    #             eye_str = f"{score.eye_score:.4f}"
+    #             mouth_str = f"{score.mouth_score:.4f}"
+    #             sharp_str = f"{score.visual_sharpness_score:.4f}"
+    #             consist_str = f"{score.motion_stability_score:.4f}"
+    #             ear_str = f"{feature.eye_openness:.4f}"
+    #             mar_str = f"{feature.mouth_openness:.4f}"
+    #             face_str = "Yes" if feature.face_detected else "No"
 
-                f.write(f"{rank_str:<6} {frame_str:<8} {time_str:<10} {final_str:<8} {eye_str:<8} {mouth_str:<8} {sharp_str:<8} {consist_str:<8} {ear_str:<8} {mar_str:<8} {face_str:<6}\n")
+    #             f.write(f"{rank_str:<6} {frame_str:<8} {time_str:<10} {final_str:<8} {eye_str:<8} {mouth_str:<8} {sharp_str:<8} {consist_str:<8} {ear_str:<8} {mar_str:<8} {face_str:<6}\n")
 
-            # Write footer with legend
-            f.write("\n" + "=" * 100 + "\n")
-            f.write("LEGEND:\n")
-            f.write("  Final    = Final weighted score (higher is better)\n")
-            f.write("  Eye      = Eye openness score (1.0 = eyes fully open, 0.0 = blinking/squinting)\n")
-            f.write("  Mouth    = Mouth closed score (1.0 = closed, 0.0 = talking/open)\n")
-            f.write("  Sharp    = Sharpness score (1.0 = sharpest, 0.0 = blurriest)\n")
-            f.write("  Consist  = Consistency score (1.0 = stable, 0.0 = sudden movement)\n")
-            f.write("  EAR      = Eye Aspect Ratio (raw value, 0.25-0.32 = normal)\n")
-            f.write("  MAR      = Mouth Aspect Ratio (raw value, 0.20-0.35 = closed)\n")
-            f.write("  Face     = Whether a face was detected in the frame\n")
-            f.write("=" * 100 + "\n")
+    #         # Write footer with legend
+    #         f.write("\n" + "=" * 100 + "\n")
+    #         f.write("LEGEND:\n")
+    #         f.write("  Final    = Final weighted score (higher is better)\n")
+    #         f.write("  Eye      = Eye openness score (1.0 = eyes fully open, 0.0 = blinking/squinting)\n")
+    #         f.write("  Mouth    = Mouth closed score (1.0 = closed, 0.0 = talking/open)\n")
+    #         f.write("  Sharp    = Sharpness score (1.0 = sharpest, 0.0 = blurriest)\n")
+    #         f.write("  Consist  = Consistency score (1.0 = stable, 0.0 = sudden movement)\n")
+    #         f.write("  EAR      = Eye Aspect Ratio (raw value, 0.25-0.32 = normal)\n")
+    #         f.write("  MAR      = Mouth Aspect Ratio (raw value, 0.20-0.35 = closed)\n")
+    #         f.write("  Face     = Whether a face was detected in the frame\n")
+    #         f.write("=" * 100 + "\n")
 
-        logger.info("Saved detailed scores to: %s", scores_file)
+    #     logger.info("Saved detailed scores to: %s", scores_file)
 
     def _draw_landmarks(self, frame: np.ndarray) -> np.ndarray:
         """Draw InsightFace 106 landmarks on frame with color coding.
@@ -396,9 +401,9 @@ class CutPointRanker:
 
         if vad_timestamps:
             vad_log_data = {
-                "speech_segments": vad_timestamps,
+                "speech_segments": [{"start": seg.start, "end": seg.end} for seg in vad_timestamps],
                 "total_segments": len(vad_timestamps),
-                "speech_end_time": vad_timestamps[-1]["end"] if vad_timestamps else 0.0
+                "speech_end_time": vad_timestamps[-1].end if vad_timestamps else 0.0
             }
             with open(output_dir / "vad_timestamps.json", 'w') as f:
                 json.dump(vad_log_data, f, indent=2)

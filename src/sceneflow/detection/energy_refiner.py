@@ -49,7 +49,7 @@ class EnergyRefiner:
         """
         props = get_video_properties(video_path)
         fps = props.fps
-
+        print(vad_timestamp, fps)
         vad_frame = int(vad_timestamp * fps)
 
         # Load audio

@@ -10,7 +10,6 @@ import cyclopts
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-from sceneflow.api import get_ranked_cut_frames
 from sceneflow.shared.exceptions import VideoDownloadError, VideoNotFoundError
 from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
@@ -173,96 +172,46 @@ def main(
                 energy_lookback_frames
             )
 
-        if top_n is not None:
-            ranked_timestamps = get_ranked_cut_frames(
-                source=video_path,
-                n=top_n,
-                sample_rate=sample_rate,
-                upload_to_airtable=airtable,
-                use_energy_refinement=not no_energy_refinement,
-                energy_threshold_db=energy_threshold_db,
-                energy_lookback_frames=energy_lookback_frames,
-                disable_visual_analysis=disable_visual_analysis,
-            )
+        speech_end_time, confidence = detect_speech_end_cli(
+            video_path,
+            no_energy_refinement,
+            energy_threshold_db,
+            energy_lookback_frames,
+            verbose
+        )
 
-            if disable_visual_analysis:
-                speech_end_time, vad_speech_end_time, confidence = detect_speech_end_cli(
-                    video_path,
-                    no_energy_refinement,
-                    energy_threshold_db,
-                    energy_lookback_frames,
-                    verbose=False
-                )
-                ranked_frames = [RankedFrame(
-                    timestamp=speech_end_time,
-                    frame_index=0,
-                    score=1.0,
-                    rank=1
-                )]
-            else:
-                speech_end_time, vad_speech_end_time, confidence = detect_speech_end_cli(
-                    video_path,
-                    no_energy_refinement,
-                    energy_threshold_db,
-                    energy_lookback_frames,
-                    verbose=False
-                )
+        if disable_visual_analysis:
+            if verbose:
+                print(f"\n{'=' * 60}")
+                print("Visual analysis disabled - using speech end time")
+                print(f"{'=' * 60}")
 
-                duration = get_video_duration(video_path)
-
-                ranker = CutPointRanker()
-                ranked_frames = ranker.rank_frames(
-                    video_path=video_path,
-                    start_time=speech_end_time,
-                    end_time=duration,
-                    sample_rate=sample_rate,
-                    save_frames=save_frames,
-                    save_video=save_video,
-                    output_path=output,
-                    save_logs=save_logs,
-                )
+            ranked_frames = [RankedFrame(
+                timestamp=speech_end_time,
+                frame_index=0,
+                score=1.0,
+                rank=1
+            )]
+            ranker = None
         else:
-            speech_end_time, vad_speech_end_time, confidence = detect_speech_end_cli(
+            duration = get_video_duration(video_path)
+
+            if verbose:
+                print(f"      Video duration: {duration:.4f}s")
+
+            need_internals = use_llm_selection or airtable or json_output
+            ranked_frames, ranker = rank_frames_cli(
                 video_path,
-                no_energy_refinement,
-                energy_threshold_db,
-                energy_lookback_frames,
+                speech_end_time,
+                duration,
+                sample_rate,
+                save_frames,
+                save_video,
+                output,
+                save_logs,
+                need_internals,
                 verbose
             )
-
-            if disable_visual_analysis:
-                if verbose:
-                    print(f"\n{'=' * 60}")
-                    print("Visual analysis disabled - using speech end time")
-                    print(f"{'=' * 60}")
-
-                ranked_frames = [RankedFrame(
-                    timestamp=speech_end_time,
-                    frame_index=0,
-                    score=1.0,
-                    rank=1
-                )]
-                features = None
-                scores = None
-            else:
-                duration = get_video_duration(video_path)
-
-                if verbose:
-                    print(f"      Video duration: {duration:.4f}s")
-
-                need_internals = use_llm_selection or airtable
-                ranked_frames, features, scores = rank_frames_cli(
-                    video_path,
-                    speech_end_time,
-                    duration,
-                    sample_rate,
-                    save_frames,
-                    save_video,
-                    output,
-                    save_logs,
-                    need_internals,
-                    verbose
-                )
 
         if not ranked_frames:
             logger.error("No suitable cut points found")
@@ -279,13 +228,10 @@ def main(
                 ranked_frames,
                 speech_end_time,
                 duration,
-                scores,
-                features,
                 verbose
             )
 
-        if save_video and (use_llm_selection or airtable) and not top_n:
-            ranker = CutPointRanker()
+        if save_video and (use_llm_selection or airtable) and not top_n and ranker:
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
         logger.info(
@@ -304,7 +250,7 @@ def main(
             video_path
         )
 
-        if airtable and not top_n:
+        if airtable and not top_n and ranker:
             try:
                 from sceneflow.api._internal import upload_to_airtable
 
@@ -317,8 +263,8 @@ def main(
                 upload_to_airtable(
                     video_path,
                     best_frame,
-                    scores,
-                    features,
+                    ranker.last_scores,
+                    ranker.last_features,
                     speech_end_time,
                     duration,
                     None,
@@ -339,7 +285,8 @@ def main(
                     traceback.print_exc()
 
         if json_output:
-            ranker = CutPointRanker()
+            if not ranker:
+                ranker = CutPointRanker()
             save_json_output(
                 json_output,
                 video_path,

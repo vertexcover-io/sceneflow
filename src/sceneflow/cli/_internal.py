@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
+from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
 from sceneflow.detection import SpeechDetector, EnergyRefiner
 from sceneflow.selection import LLMFrameSelector
@@ -47,17 +47,19 @@ def detect_speech_end_cli(
     energy_threshold_db: float,
     energy_lookback_frames: int,
     verbose: bool
-) -> Tuple[float, float, float]:
-    """Detect speech end time with CLI-specific logging."""
+) -> Tuple[float, float]:
+    """Detect speech end time with CLI-specific logging.
+
+    Returns:
+        Tuple of (speech_end_time, confidence) where:
+        - speech_end_time: Final refined timestamp in seconds (after energy refinement if enabled)
+        - confidence: Detection confidence score (0.0-1.0)
+    """
     if verbose:
         print("\n[1/2] Detecting speech end time using VAD...")
 
     detector = SpeechDetector()
-    vad_speech_end_time, vad_timestamps = detector.get_speech_timestamps(source)
-
-    confidence = 0.0
-    if vad_timestamps:
-        confidence = 1.0
+    vad_speech_end_time, confidence = detector.get_speech_end_time(file_path=source)
 
     if verbose:
         print(f"      Speech ends at: {vad_speech_end_time:.4f}s (confidence: {confidence:.2f})")
@@ -81,7 +83,7 @@ def detect_speech_end_cli(
                 f"(energy drop: {result.energy_drop_db:.2f} dB)"
             )
 
-    return speech_end_time, vad_speech_end_time, confidence
+    return speech_end_time, confidence
 
 
 def rank_frames_cli(
@@ -95,38 +97,25 @@ def rank_frames_cli(
     save_logs: bool,
     need_internals: bool,
     verbose: bool
-) -> Tuple[List[RankedFrame], Optional[List[FrameFeatures]], Optional[List[FrameScore]]]:
+) -> Tuple[List[RankedFrame], CutPointRanker]:
     """Rank frames with CLI-specific logging."""
     if verbose:
         print(f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s...")
 
     ranker = CutPointRanker()
 
-    if need_internals:
-        ranked_frames, features, scores = ranker.rank_frames(
-            video_path=source,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-            save_frames=save_frames,
-            save_video=False,
-            output_path=output,
-            save_logs=save_logs,
-            return_internals=True
-        )
-        return ranked_frames, features, scores
-    else:
-        ranked_frames = ranker.rank_frames(
-            video_path=source,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-            save_frames=save_frames,
-            save_video=save_video,
-            output_path=output,
-            save_logs=save_logs
-        )
-        return ranked_frames, None, None
+    ranked_frames = ranker.rank_frames(
+        video_path=source,
+        start_time=speech_end_time,
+        end_time=duration,
+        sample_rate=sample_rate,
+        save_frames=save_frames,
+        save_video=save_video if not need_internals else False,
+        output_path=output,
+        save_logs=save_logs
+    )
+
+    return ranked_frames, ranker
 
 
 def apply_llm_selection_cli(
@@ -134,8 +123,6 @@ def apply_llm_selection_cli(
     ranked_frames: List[RankedFrame],
     speech_end_time: float,
     duration: float,
-    scores: List[FrameScore],
-    features: List[FrameFeatures],
     verbose: bool
 ) -> RankedFrame:
     """Apply LLM selection with CLI-specific logging."""

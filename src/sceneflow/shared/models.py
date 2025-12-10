@@ -25,6 +25,18 @@ class EnergyRefinementResult:
 
 
 @dataclass
+class SpeechSegment:
+    """A single speech segment detected by VAD with start and end timestamps."""
+    start: float
+    end: float
+
+    @property
+    def duration(self) -> float:
+        """Duration of the speech segment in seconds."""
+        return self.end - self.start
+
+
+@dataclass
 class FaceFeatures:
     """Features extracted from a single face within a frame."""
     face_index: int
@@ -34,6 +46,16 @@ class FaceFeatures:
     eye_openness: float
     expression_activity: float
     pose_deviation: float
+    
+    
+@dataclass
+class FaceMetrics:
+    """Metrics extracted from a face."""
+    ear: float           # Eye aspect ratio
+    mar: float           # Mouth aspect ratio
+    sharpness: float     # Face region sharpness
+    center: Tuple[float, float]  # Face center position
+    detected: bool       # Whether face was found
 
 
 @dataclass
@@ -88,43 +110,5 @@ class RankedFrame:
         return f"RankedFrame(rank={self.rank}, time={self.timestamp:.4f}s, score={self.score:.4f})"
 
 
-# Legacy models for backward compatibility
-@dataclass
-class TemporalContext:
-    time_since_speech_end: float
-    time_until_video_end: float
-    percentage_through_video: float
 
 
-@dataclass
-class NormalizedScores:
-    eye_openness: float
-    motion_stability: float
-    expression_neutrality: float
-    pose_stability: float
-    visual_sharpness: float
-
-
-@dataclass
-class RawMeasurements:
-    eye_aspect_ratio: float
-    motion_magnitude: float
-    mouth_aspect_ratio: float
-    head_pose_deviation: float
-    sharpness_variance: float
-
-
-@dataclass
-class FrameMetadata:
-    timestamp: float
-    overall_score: float
-    scores: NormalizedScores
-    raw_measurements: RawMeasurements
-    temporal_context: TemporalContext
-
-
-@dataclass 
-class AggregatedFaceMetrics:
-    eye_openness: float
-    expression_activity: float
-    pose_deviation: float

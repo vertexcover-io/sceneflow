@@ -29,18 +29,12 @@ except ImportError as e:
 from sceneflow.shared.constants import INSIGHTFACE, EAR, MAR
 from sceneflow.shared.exceptions import InsightFaceError
 from sceneflow.extraction.face_metrics import calculate_ear, calculate_mar
+from sceneflow.shared.models import FaceMetrics
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class FaceMetrics:
-    """Metrics extracted from a face."""
-    ear: float           # Eye aspect ratio
-    mar: float           # Mouth aspect ratio
-    sharpness: float     # Face region sharpness
-    center: Tuple[float, float]  # Face center position
-    detected: bool       # Whether face was found
+
 
 
 # Landmark indices for 106-point model

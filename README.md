@@ -12,7 +12,7 @@ SceneFlow automatically identifies the optimal point to cut AI-generated talking
 - **Energy-Based Refinement** - Frame-accurate speech end detection using audio energy analysis
 - **Visual Analysis** - Multi-factor ranking based on eye openness, motion stability, expression neutrality, pose stability, and visual sharpness
 - **Multi-Face Support** - Analyzes all faces with center-weighted scoring
-- **LLM Integration** - Optional GPT-4o vision for selecting the best frame
+- **LLM Integration** - Optional vision language models for selecting the best frame
 - **URL Support** - Direct video URL processing via HTTP GET
 - **Airtable Integration** - Upload results and videos for tracking
 - **InsightFace-Powered** - 106-landmark facial detection for precise analysis
@@ -27,7 +27,7 @@ pip install sceneflow
 
 - Python 3.9 or higher
 - FFmpeg (for video processing)
-- OpenAI API key (optional, for LLM-powered frame selection)
+- Vision Language Model API key (optional, for AI-powered frame selection)
 
 ## Quick Start
 
@@ -58,7 +58,7 @@ sceneflow video.mp4 --save-frames --save-video --save-logs
 # Custom output path for video
 sceneflow video.mp4 --output /path/to/output.mp4
 
-# Use LLM for frame selection
+# Use AI vision model for frame selection
 sceneflow video.mp4 --use-llm-selection
 
 # Upload results to Airtable
@@ -90,7 +90,7 @@ top_5 = get_ranked_cut_frames("video.mp4", n=5)
 for i, time in enumerate(top_5, 1):
     print(f"{i}. {time:.2f}s")
 
-# With LLM-powered frame selection
+# With AI-powered frame selection
 best_time = get_cut_frame(
     "video.mp4",
     use_llm_selection=True,
@@ -160,7 +160,7 @@ print(f"Best cut point: {best_cut.timestamp:.2f}s (score: {best_cut.score:.4f})"
 | `save_frames`             | bool  | False    | All           | Save annotated frames                    |
 | `save_logs`               | bool  | False    | All           | Save analysis logs                       |
 | `upload_to_airtable`      | bool  | False    | All           | Upload to Airtable                       |
-| `use_llm_selection`       | bool  | False    | All           | Use GPT-4o for selection                 |
+| `use_llm_selection`       | bool  | False    | All           | Use Vision Language Models for selection |
 | `use_energy_refinement`   | bool  | True     | All           | Refine VAD with energy analysis          |
 | `energy_threshold_db`     | float | 8.0      | All           | Minimum dB drop for refinement           |
 | `energy_lookback_frames`  | int   | 20       | All           | Max frames to search backward            |
@@ -205,7 +205,7 @@ Visual Analysis Options:
   --disable-visual-analysis      Disable visual analysis and return speech end time only (faster)
 
 Advanced Options:
-  --use-llm-selection            Use GPT-4o for frame selection
+  --use-llm-selection            Use Vision Language Models for frame selection
   --airtable                     Upload results to Airtable
 
   --help                         Show help message
@@ -222,8 +222,10 @@ AIRTABLE_ACCESS_TOKEN     # Your Airtable access token
 AIRTABLE_BASE_ID          # Your Airtable base ID
 AIRTABLE_TABLE_NAME       # Table name (optional, defaults to "SceneFlow Analysis")
 
-# LLM-Powered Selection
-OPENAI_API_KEY            # OpenAI API key for GPT-4o integration
+# AI-Powered Selection
+OPENAI_API_KEY            # OpenAI API key for vision models (GPT-4o, GPT-4o-mini)
+ANTHROPIC_API_KEY         # Anthropic API key for Claude 3.5 Sonnet vision
+GOOGLE_API_KEY            # Google API key for Gemini 1.5 Pro vision
 ```
 
 Quick setup:
@@ -283,7 +285,7 @@ Check the `examples/` directory:
 - **Expression Analysis**: Mouth Aspect Ratio (MAR) using 20-point mouth landmarks
 - **Frame Quality**: Laplacian variance
 - **Ranking**: Multi-factor scoring with temporal context windows
-- **LLM Selection**: GPT-4o vision analysis
+- **LLM Selection**: Vision Language Model analysis (supports GPT-4o, GPT-4o-mini, Claude 3.5 Sonnet, Gemini 1.5 Pro, and other VLMs)
 
 ## Contributing
 

@@ -7,7 +7,6 @@ Use the public API functions from sceneflow.api instead.
 import logging
 from typing import List, Optional
 
-from sceneflow.shared.config import RankingConfig
 from sceneflow.detection import EnergyRefiner
 from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
 from sceneflow.detection import SpeechDetector
@@ -83,48 +82,3 @@ def select_best_with_llm(
     except Exception as e:
         logger.warning("LLM selection failed: %s, using top result", e)
         return ranked_frames[0]
-
-
-def upload_to_airtable(
-    video_path: str,
-    best_frame: RankedFrame,
-    scores: List[FrameScore],
-    features: List[FrameFeatures],
-    speech_end_time: float,
-    duration: float,
-    config: Optional[RankingConfig],
-    sample_rate: int,
-    airtable_access_token: Optional[str],
-    airtable_base_id: Optional[str],
-    airtable_table_name: Optional[str],
-) -> str:
-    """Upload analysis results to Airtable."""
-    from sceneflow.integration import upload_to_airtable as airtable_upload
-
-    best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
-    best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
-
-    if not best_score or not best_features:
-        raise RuntimeError("Could not upload to Airtable - missing data")
-
-    config_dict = {
-        "sample_rate": sample_rate,
-        "weights": {
-            "eye": config.eye_weight if config else 0.4,
-            "mouth": config.mouth_weight if config else 0.6,
-        },
-    }
-
-    record_id = airtable_upload(
-        video_path=video_path,
-        best_frame=best_frame,
-        frame_score=best_score,
-        frame_features=best_features,
-        speech_end_time=speech_end_time,
-        duration=duration,
-        config_dict=config_dict,
-        access_token=airtable_access_token,
-        base_id=airtable_base_id,
-        table_name=airtable_table_name,
-    )
-    return record_id

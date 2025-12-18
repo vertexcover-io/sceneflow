@@ -51,7 +51,6 @@ dependencies = [
     "onnxruntime>=1.20.1",
     "opencv-python>=4.8.0",
     "openai>=1.0.0",
-    "pyairtable>=3.2.0",
     "requests>=2.31.0",
     "silero-vad>=6.0.0",
     "torch>=2.0.0",
@@ -103,6 +102,7 @@ disallow_untyped_defs = false
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
+    "pyairtable>=3.2.0",
 ]
 
 [tool.hatch.version]

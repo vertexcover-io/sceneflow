@@ -18,13 +18,22 @@ from sceneflow.detection import SpeechDetector, EnergyRefiner
 
 # Airtable integration (optional - only import if available)
 try:
-    from sceneflow.integration import AirtableUploader, upload_to_airtable
+    from sceneflow.integration import (
+        AirtableUploader,
+        upload_to_airtable,
+        analyze_and_upload_to_airtable,
+        analyze_ranked_and_upload_to_airtable,
+        cut_and_upload_to_airtable,
+    )
 
     AIRTABLE_AVAILABLE = True
 except ImportError:
     AIRTABLE_AVAILABLE = False
     AirtableUploader = None
     upload_to_airtable = None
+    analyze_and_upload_to_airtable = None
+    analyze_ranked_and_upload_to_airtable = None
+    cut_and_upload_to_airtable = None
 
 __version__ = "0.1.0"
 
@@ -46,6 +55,9 @@ __all__ = [
     # Airtable integration (optional)
     "AirtableUploader",
     "upload_to_airtable",
+    "analyze_and_upload_to_airtable",
+    "analyze_ranked_and_upload_to_airtable",
+    "cut_and_upload_to_airtable",
     "AIRTABLE_AVAILABLE",
     # Version
     "__version__",

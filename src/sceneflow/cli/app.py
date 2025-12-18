@@ -237,7 +237,7 @@ def main(
 
         if airtable and not top_n and ranker:
             try:
-                from sceneflow.api._internal import upload_to_airtable
+                from sceneflow.integration.airtable import upload_to_airtable
 
                 if verbose:
                     print(f"\n{'=' * 60}")
@@ -245,22 +245,44 @@ def main(
                     print(f"{'=' * 60}")
                     print("Uploading analysis to Airtable...")
 
-                upload_to_airtable(
-                    video_path,
-                    best_frame,
-                    ranker.last_scores,
-                    ranker.last_features,
-                    speech_end_time,
-                    duration,
+                best_score = next(
+                    (s for s in ranker.last_scores if s.frame_index == best_frame.frame_index),
                     None,
-                    sample_rate,
-                    None,
-                    None,
+                )
+                best_features = next(
+                    (f for f in ranker.last_features if f.frame_index == best_frame.frame_index),
                     None,
                 )
 
+                if not best_score or not best_features:
+                    raise RuntimeError("Could not find score and features for best frame")
+
+                config_dict = {
+                    "sample_rate": sample_rate,
+                    "weights": {
+                        "eye_openness": 0.30,
+                        "motion_stability": 0.25,
+                        "expression_neutrality": 0.20,
+                        "pose_stability": 0.15,
+                        "visual_sharpness": 0.10,
+                    },
+                }
+
+                record_id = upload_to_airtable(
+                    video_path=video_path,
+                    best_frame=best_frame,
+                    frame_score=best_score,
+                    frame_features=best_features,
+                    speech_end_time=speech_end_time,
+                    duration=duration,
+                    config_dict=config_dict,
+                    access_token=None,
+                    base_id=None,
+                    table_name=None,
+                )
+
                 if verbose:
-                    print("Successfully uploaded to Airtable!")
+                    print(f"Successfully uploaded to Airtable! Record ID: {record_id}")
 
             except Exception as e:
                 logger.error("Failed to upload to Airtable: %s", e)

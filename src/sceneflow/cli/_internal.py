@@ -12,6 +12,8 @@ from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
 from sceneflow.detection import SpeechDetector, refine_speech_end
 from sceneflow.selection import LLMFrameSelector
+from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
+from sceneflow.utils.video import cut_video
 
 logger = logging.getLogger(__name__)
 
@@ -107,17 +109,24 @@ def rank_frames_cli(
 
     ranker = CutPointRanker()
 
-    ranked_frames = ranker.rank_frames(
+    result = ranker.rank_frames(
         video_path=source,
         start_time=speech_end_time,
         end_time=duration,
         sample_rate=sample_rate,
-        save_frames=save_frames,
-        output_path=output if not need_internals else None,
-        save_logs=save_logs,
     )
 
-    return ranked_frames, ranker
+    # Handle side effects
+    if save_frames:
+        save_annotated_frames(source, result.ranked_frames, ranker.extractor)
+
+    if save_logs and result.features and result.scores:
+        save_analysis_logs(source, result.ranked_frames, result.features, result.scores)
+
+    if output and not need_internals:
+        cut_video(source, result.ranked_frames[0].timestamp, output)
+
+    return result.ranked_frames, ranker
 
 
 def apply_llm_selection_cli(

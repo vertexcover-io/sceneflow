@@ -20,6 +20,7 @@ from sceneflow.utils.video import (
     get_video_duration,
     cut_video,
 )
+from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
 
 logger = logging.getLogger(__name__)
 
@@ -95,40 +96,40 @@ def analyze_and_upload_to_airtable(
         duration = get_video_duration(video_path)
 
         ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
+        result = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
         )
 
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        # Get internals for upload
-        features = ranker.last_features
-        scores = ranker.last_scores
-
-        if not features or not scores:
+        if not result.features or not result.scores:
             raise RuntimeError("Failed to extract frame features and scores")
 
-        best_frame = ranked_frames[0]
+        best_frame = result.ranked_frames[0]
 
         # Stage 3: Optional LLM selection
-        if use_llm_selection and len(ranked_frames) > 1:
+        if use_llm_selection and len(result.ranked_frames) > 1:
             best_frame = select_best_with_llm(
                 video_path,
-                ranked_frames,
+                result.ranked_frames,
                 speech_end_time,
                 duration,
-                scores,
-                features,
+                result.scores,
+                result.features,
                 openai_api_key,
             )
 
         # Stage 4: Upload to Airtable
-        best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
-        best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
+        best_score = next(
+            (s for s in result.scores if s.frame_index == best_frame.frame_index), None
+        )
+        best_features = next(
+            (f for f in result.features if f.frame_index == best_frame.frame_index), None
+        )
 
         if not best_score or not best_features:
             raise RuntimeError("Could not find score and features for best frame")
@@ -228,27 +229,27 @@ def analyze_ranked_and_upload_to_airtable(
         duration = get_video_duration(video_path)
 
         ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
+        result = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
         )
 
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        # Get internals for upload
-        features = ranker.last_features
-        scores = ranker.last_scores
-
-        if not features or not scores:
+        if not result.features or not result.scores:
             raise RuntimeError("Failed to extract frame features and scores")
 
         # Stage 3: Upload best result to Airtable
-        best_frame = ranked_frames[0]
-        best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
-        best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
+        best_frame = result.ranked_frames[0]
+        best_score = next(
+            (s for s in result.scores if s.frame_index == best_frame.frame_index), None
+        )
+        best_features = next(
+            (f for f in result.features if f.frame_index == best_frame.frame_index), None
+        )
 
         if not best_score or not best_features:
             raise RuntimeError("Could not find score and features for best frame")
@@ -269,7 +270,7 @@ def analyze_ranked_and_upload_to_airtable(
         )
 
         # Return top N timestamps
-        top_timestamps = [frame.timestamp for frame in ranked_frames[:n]]
+        top_timestamps = [frame.timestamp for frame in result.ranked_frames[:n]]
         logger.info(
             "Uploaded to Airtable: top %d cut points, best at %.4fs, record_id=%s",
             len(top_timestamps),
@@ -358,52 +359,50 @@ def cut_and_upload_to_airtable(
         duration = get_video_duration(video_path)
 
         ranker = CutPointRanker(config)
+        result = ranker.rank_frames(
+            video_path=video_path,
+            start_time=speech_end_time,
+            end_time=duration,
+            sample_rate=sample_rate,
+        )
 
-        rank_kwargs = {
-            "video_path": video_path,
-            "start_time": speech_end_time,
-            "end_time": duration,
-            "sample_rate": sample_rate,
-            "save_frames": save_frames,
-            "output_path": None if use_llm_selection else output_path,
-        }
-
-        if save_logs:
-            rank_kwargs["save_logs"] = True
-
-        ranked_frames = ranker.rank_frames(**rank_kwargs)
-
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        # Get internals for upload
-        features = ranker.last_features
-        scores = ranker.last_scores
-
-        if not features or not scores:
+        if not result.features or not result.scores:
             raise RuntimeError("Failed to extract frame features and scores")
 
-        best_frame = ranked_frames[0]
+        best_frame = result.ranked_frames[0]
 
         # Stage 3: Optional LLM selection
-        if use_llm_selection and len(ranked_frames) > 1:
+        if use_llm_selection and len(result.ranked_frames) > 1:
             best_frame = select_best_with_llm(
                 video_path,
-                ranked_frames,
+                result.ranked_frames,
                 speech_end_time,
                 duration,
-                scores,
-                features,
+                result.scores,
+                result.features,
                 openai_api_key,
             )
 
-        # Save cut video if LLM was used (otherwise already saved by ranker)
-        if use_llm_selection:
-            cut_video(video_path, best_frame.timestamp, output_path)
+        # Handle side effects after best frame is determined
+        if save_frames:
+            save_annotated_frames(video_path, result.ranked_frames, ranker.extractor)
+
+        if save_logs:
+            save_analysis_logs(video_path, result.ranked_frames, result.features, result.scores)
+
+        # Cut the video
+        cut_video(video_path, best_frame.timestamp, output_path)
 
         # Stage 4: Upload to Airtable
-        best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
-        best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
+        best_score = next(
+            (s for s in result.scores if s.frame_index == best_frame.frame_index), None
+        )
+        best_features = next(
+            (f for f in result.features if f.frame_index == best_frame.frame_index), None
+        )
 
         if not best_score or not best_features:
             raise RuntimeError("Could not find score and features for best frame")

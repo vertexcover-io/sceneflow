@@ -25,7 +25,7 @@ async def basic_example_async():
     - Same configuration options as sync version
     - Perfect for web servers, bots, and concurrent processing
     """
-    video_path = "https://cco-public.s3.us-west-1.amazonaws.com/cmirs9amy0000lnq5njqv1lb2%2F65e65f58-3021-46eb-9564-33dfcc2abc52%2F7d0cc00d-903a-4c64-a5cf-07a1077fc743%2Fvideo%2Fvoice_change_0e00fadb.mp4"
+    video_path = "new_dataset/voice_change_videos/video1.mp4"
     output_path = "output/demo_async.mp4"
 
     print("\nSceneFlow - Async Example")

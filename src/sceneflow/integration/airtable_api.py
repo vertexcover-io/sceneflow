@@ -18,6 +18,7 @@ from sceneflow.utils.video import (
     download_video,
     cleanup_downloaded_video,
     get_video_duration,
+    cut_video,
 )
 
 logger = logging.getLogger(__name__)
@@ -398,7 +399,7 @@ def cut_and_upload_to_airtable(
 
         # Save cut video if LLM was used (otherwise already saved by ranker)
         if use_llm_selection:
-            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output_path)
+            cut_video(video_path, best_frame.timestamp, output_path)
 
         # Stage 4: Upload to Airtable
         best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)

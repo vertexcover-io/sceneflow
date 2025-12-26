@@ -15,6 +15,7 @@ from sceneflow.utils.video import (
     download_video,
     cleanup_downloaded_video,
     get_video_duration,
+    cut_video as _cut_video_util,
 )
 from sceneflow.api._internal import (
     detect_speech_end,
@@ -249,8 +250,7 @@ def cut_video(
             logger.info(
                 "Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time
             )
-            ranker = CutPointRanker(ranking_config)
-            ranker._save_cut_video(video_path, speech_end_time, output_path=output_path)
+            _cut_video_util(video_path, speech_end_time, output_path)
             return speech_end_time
 
         duration = get_video_duration(video_path)
@@ -292,7 +292,7 @@ def cut_video(
                 )
 
         if use_llm_selection:
-            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output_path)
+            _cut_video_util(video_path, best_frame.timestamp, output_path)
 
         logger.info(
             "Cut video saved to %s (best cut point: %.4fs, frame: %d, score: %.4f)",

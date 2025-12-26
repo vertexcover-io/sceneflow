@@ -4,14 +4,17 @@ This module provides shared utilities for video operations to eliminate
 code duplication and provide consistent error handling.
 """
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 
+import aiofiles
 import cv2
+import httpx
 import requests
 
 from sceneflow.shared.constants import VIDEO
@@ -552,6 +555,271 @@ def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
         raise FFmpegExecutionError(" ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds")
     except subprocess.CalledProcessError as e:
         raise FFmpegExecutionError(" ".join(cmd), e.stderr)
+    finally:
+        try:
+            Path(temp_path).unlink()
+        except Exception:
+            pass
+
+
+# =============================================================================
+# Async I/O Operations
+# =============================================================================
+
+
+async def download_video_async(url: str) -> str:
+    """
+    Async version of download_video using httpx.
+
+    Downloads video from URL to temporary directory using async HTTP GET.
+
+    Args:
+        url: Direct video URL (e.g., .mp4, .avi file URLs)
+
+    Returns:
+        Path to downloaded video file
+
+    Raises:
+        VideoDownloadError: If download fails
+        InvalidURLError: If URL is invalid
+    """
+    url = validate_video_url(url)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="sceneflow_"))
+    url_path = Path(url.split("?")[0])
+    filename = url_path.name if url_path.suffix else "video.mp4"
+    output_path = temp_dir / filename
+
+    try:
+        async with httpx.AsyncClient(timeout=VIDEO.DOWNLOAD_TIMEOUT_SECONDS) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+
+                total_size = int(response.headers.get("content-length", 0))
+
+                async with aiofiles.open(output_path, "wb") as f:
+                    downloaded = 0
+                    async for chunk in response.aiter_bytes(
+                        chunk_size=VIDEO.DOWNLOAD_CHUNK_SIZE_BYTES
+                    ):
+                        await f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            logger.debug("Download progress: %.1f%%", progress)
+
+        logger.info("Downloaded video to: %s", output_path)
+        return str(output_path)
+
+    except httpx.TimeoutException:
+        raise VideoDownloadError(
+            url, f"Download timed out after {VIDEO.DOWNLOAD_TIMEOUT_SECONDS} seconds"
+        )
+    except httpx.ConnectError as e:
+        raise VideoDownloadError(url, f"Connection failed: {e}")
+    except httpx.HTTPStatusError as e:
+        raise VideoDownloadError(url, f"HTTP error {e.response.status_code}")
+    except OSError as e:
+        raise VideoDownloadError(url, f"File system error: {e}")
+    except Exception as e:
+        logger.exception("Unexpected error during async download")
+        raise VideoDownloadError(url, f"Unexpected error: {e}") from e
+
+
+async def cleanup_downloaded_video_async(video_path: str) -> None:
+    """
+    Async version of cleanup_downloaded_video.
+
+    Delete downloaded video and its temporary directory asynchronously.
+
+    Args:
+        video_path: Path to the downloaded video file
+    """
+    try:
+        video_file = Path(video_path)
+        temp_dir = video_file.parent
+
+        if video_file.exists():
+            await asyncio.to_thread(video_file.unlink)
+            logger.debug("Deleted downloaded video: %s", video_path)
+
+        if temp_dir.exists() and temp_dir.name.startswith("sceneflow_"):
+            remaining_files = list(temp_dir.iterdir())
+            if not remaining_files:
+                await asyncio.to_thread(temp_dir.rmdir)
+                logger.debug("Deleted temporary directory: %s", temp_dir)
+            else:
+                logger.warning("Temporary directory not empty, skipping deletion: %s", temp_dir)
+
+    except Exception as e:
+        logger.warning("Failed to clean up downloaded video: %s", e)
+
+
+@asynccontextmanager
+async def temporary_video_download_async(url: str):
+    """
+    Async context manager for downloading and auto-cleaning up video.
+
+    Args:
+        url: Video URL to download
+
+    Yields:
+        Path to downloaded video file
+
+    Raises:
+        VideoDownloadError: If download fails
+    """
+    video_path = None
+    try:
+        video_path = await download_video_async(url)
+        yield video_path
+    finally:
+        if video_path:
+            await cleanup_downloaded_video_async(video_path)
+
+
+async def cut_video_async(
+    video_path: str, cut_timestamp: float, output_path: Optional[str] = None
+) -> str:
+    """
+    Async version of cut_video using asyncio subprocess.
+
+    Cut video from start to the specified timestamp using FFmpeg.
+
+    Args:
+        video_path: Path to input video file
+        cut_timestamp: Timestamp where to cut the video (in seconds)
+        output_path: Optional custom output path for the cut video.
+                    If None, saves to output/<video_name>_cut.mp4
+
+    Returns:
+        Path to the saved cut video
+
+    Raises:
+        FFmpegNotFoundError: If ffmpeg is not installed
+        FFmpegExecutionError: If ffmpeg command fails
+    """
+    from sceneflow.shared.constants import FFMPEG
+    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
+
+    if output_path:
+        final_output_path = Path(output_path)
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        video_base_name = Path(video_path).stem
+        output_dir = Path("output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_filename = f"{video_base_name}_cut.mp4"
+        final_output_path = output_dir / output_filename
+
+    cmd = [
+        "ffmpeg",
+        "-i",
+        video_path,
+        "-t",
+        f"{cut_timestamp:.6f}",
+        "-c:v",
+        FFMPEG.VIDEO_CODEC,
+        "-c:a",
+        FFMPEG.AUDIO_CODEC,
+        "-y",
+        str(final_output_path),
+    ]
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=FFMPEG.TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise FFmpegExecutionError(
+                " ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
+            )
+
+        if process.returncode != 0:
+            stderr_text = stderr.decode() if stderr else ""
+            logger.error("FFmpeg failed: %s", stderr_text)
+            raise FFmpegExecutionError(" ".join(cmd), stderr_text)
+
+        logger.info("Cut video saved (0.0000s - %.4fs) to: %s", cut_timestamp, final_output_path)
+        return str(final_output_path)
+
+    except FileNotFoundError:
+        raise FFmpegNotFoundError()
+
+
+async def cut_video_to_bytes_async(video_path: str, cut_timestamp: float) -> bytes:
+    """
+    Async version of cut_video_to_bytes.
+
+    Cut video from start to timestamp and return as bytes.
+
+    Args:
+        video_path: Path to input video file
+        cut_timestamp: Timestamp where to cut the video (in seconds)
+
+    Returns:
+        Cut video as bytes
+
+    Raises:
+        FFmpegNotFoundError: If ffmpeg is not installed
+        FFmpegExecutionError: If ffmpeg command fails
+    """
+    from sceneflow.shared.constants import FFMPEG
+    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    try:
+        cmd = [
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-t",
+            f"{cut_timestamp:.6f}",
+            "-c:v",
+            FFMPEG.VIDEO_CODEC,
+            "-c:a",
+            FFMPEG.AUDIO_CODEC,
+            "-y",
+            temp_path,
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=FFMPEG.TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise FFmpegExecutionError(
+                " ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
+            )
+
+        if process.returncode != 0:
+            stderr_text = stderr.decode() if stderr else ""
+            raise FFmpegExecutionError(" ".join(cmd), stderr_text)
+
+        async with aiofiles.open(temp_path, "rb") as f:
+            return await f.read()
+
+    except FileNotFoundError:
+        raise FFmpegNotFoundError()
     finally:
         try:
             Path(temp_path).unlink()

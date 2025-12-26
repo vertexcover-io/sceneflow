@@ -16,6 +16,7 @@ from sceneflow.utils.video import (
     cleanup_downloaded_video,
     get_video_duration,
     validate_video_path,
+    cut_video,
 )
 from sceneflow.cli._internal import (
     print_verbose_header,
@@ -216,7 +217,7 @@ def main(
             )
 
         if output and (use_llm_selection or airtable) and not top_n and ranker:
-            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
+            cut_video(video_path, best_frame.timestamp, output)
 
         logger.info("Best cut point: %.4fs (score: %.4f)", best_frame.timestamp, best_frame.score)
 

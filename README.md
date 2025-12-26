@@ -52,10 +52,10 @@ sceneflow "https://example.com/video.mp4" --verbose
 **Advanced Options**
 
 ```bash
-# Save outputs (frames, video, logs)
-sceneflow video.mp4 --save-frames --save-video --save-logs
+# Save outputs (frames, logs)
+sceneflow video.mp4 --save-frames --save-logs
 
-# Custom output path for video
+# Save video to custom output path
 sceneflow video.mp4 --output /path/to/output.mp4
 
 # Use AI vision model for frame selection
@@ -97,12 +97,6 @@ best_time = get_cut_frame(
     openai_api_key="your-api-key"
 )
 
-# Upload to Airtable
-best_time = get_cut_frame(
-    "video.mp4",
-    upload_to_airtable=True,
-    save_video=True
-)
 
 # Disable energy refinement
 best_time = get_cut_frame(
@@ -150,31 +144,57 @@ print(f"Best cut point: {best_cut.timestamp:.2f}s (score: {best_cut.score:.4f})"
 
 ### Common Parameters
 
-| Parameter                 | Type  | Default  | Used By       | Description                              |
-| ------------------------- | ----- | -------- | ------------- | ---------------------------------------- |
-| `source`                  | str   | required | All           | Video file path or URL                   |
-| `output_path`             | str   | required | cut_video     | Output path for cut video                |
-| `n`                       | int   | 5        | get_ranked    | Number of timestamps to return           |
-| `sample_rate`             | int   | 2        | All           | Process every Nth frame                  |
-| `save_video`              | bool  | False    | get_cut_frame | Save cut video                           |
-| `save_frames`             | bool  | False    | All           | Save annotated frames                    |
-| `save_logs`               | bool  | False    | All           | Save analysis logs                       |
-| `upload_to_airtable`      | bool  | False    | All           | Upload to Airtable                       |
-| `use_llm_selection`       | bool  | False    | All           | Use Vision Language Models for selection |
-| `use_energy_refinement`   | bool  | True     | All           | Refine VAD with energy analysis          |
-| `energy_threshold_db`     | float | 8.0      | All           | Minimum dB drop for refinement           |
-| `energy_lookback_frames`  | int   | 20       | All           | Max frames to search backward            |
-| `disable_visual_analysis` | bool  | False    | All           | Skip visual ranking, use speech end only |
-| `openai_api_key`          | str   | None     | All           | OpenAI API key (or use env var)          |
-| `airtable_access_token`   | str   | None     | All           | Airtable token (or use env var)          |
-| `airtable_base_id`        | str   | None     | All           | Airtable base ID (or use env var)        |
-| `airtable_table_name`     | str   | None     | All           | Airtable table name (or use env var)     |
+| Parameter                 | Type  | Default  | Used By    | Description                              |
+| ------------------------- | ----- | -------- | ---------- | ---------------------------------------- |
+| `source`                  | str   | required | All        | Video file path or URL                   |
+| `output_path`             | str   | required | cut_video  | Output path for cut video                |
+| `n`                       | int   | 5        | get_ranked | Number of timestamps to return           |
+| `sample_rate`             | int   | 2        | All        | Process every Nth frame                  |
+| `save_frames`             | bool  | False    | All        | Save annotated frames                    |
+| `save_logs`               | bool  | False    | All        | Save analysis logs                       |
+| `use_llm_selection`       | bool  | False    | All        | Use Vision Language Models for selection |
+| `use_energy_refinement`   | bool  | True     | All        | Refine VAD with energy analysis          |
+| `energy_threshold_db`     | float | 8.0      | All        | Minimum dB drop for refinement           |
+| `energy_lookback_frames`  | int   | 20       | All        | Max frames to search backward            |
+| `disable_visual_analysis` | bool  | False    | All        | Skip visual ranking, use speech end only |
+| `openai_api_key`          | str   | None     | All        | OpenAI API key (or use env var)          |
 
 **Functions:**
 
 - `get_cut_frame(source, **params)` - Returns best cut timestamp (float)
 - `get_ranked_cut_frames(source, n=5, **params)` - Returns top N timestamps (list)
 - `cut_video(source, output_path, **params)` - Cuts video and returns timestamp (float)
+
+### Airtable Integration (Optional)
+
+For development and evaluation workflows, SceneFlow provides dedicated functions to upload analysis results and videos to Airtable. This is useful for:
+
+- Tracking results across multiple test videos
+- Running evaluations and comparing different configurations
+- Building datasets of analysis results for quality assessment
+
+```python
+from sceneflow import analyze_ranked_and_upload_to_airtable, cut_and_upload_to_airtable
+
+# Analyze video and upload results to Airtable for tracking
+analyze_ranked_and_upload_to_airtable(
+    source="video.mp4",
+    airtable_access_token="your-token",  # or set AIRTABLE_ACCESS_TOKEN env var
+    airtable_base_id="your-base-id",     # or set AIRTABLE_BASE_ID env var
+    airtable_table_name="SceneFlow Analysis"  # optional, defaults to "SceneFlow Analysis"
+)
+
+# Cut video and upload to Airtable for eval tracking
+cut_and_upload_to_airtable(
+    source="video.mp4",
+    output_path="output.mp4",
+    airtable_access_token="your-token",
+    airtable_base_id="your-base-id",
+    airtable_table_name="SceneFlow Analysis"
+)
+```
+
+These functions accept all the same parameters as the main API functions (`get_cut_frame`, `get_ranked_cut_frames`, `cut_video`), plus Airtable-specific parameters for upload tracking.
 
 ## CLI Reference
 
@@ -192,8 +212,7 @@ Output Options:
 Processing Options:
   --sample-rate INT              Process every Nth frame (default: 2)
   --save-frames                  Save annotated frames with landmarks
-  --save-video                   Save cut video
-  --output PATH                  Custom output path for video
+  --output PATH                  Output path for saved video (requires ffmpeg)
   --save-logs                    Save detailed logs
 
 Speech Detection Options:

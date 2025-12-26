@@ -152,8 +152,6 @@ def download_video(url: str) -> str:
     # Validate URL first
     url = validate_video_url(url)
 
-    logger.info("Downloading video from URL: %s", url)
-
     # Create temp directory for downloaded video
     temp_dir = Path(tempfile.mkdtemp(prefix="sceneflow_"))
 
@@ -181,7 +179,7 @@ def download_video(url: str) -> str:
                         progress = (downloaded / total_size) * 100
                         logger.debug("Download progress: %.1f%%", progress)
 
-        logger.info("Video downloaded successfully to: %s", output_path)
+        logger.info("Downloaded video to: %s", output_path)
         return str(output_path)
 
     except requests.exceptions.Timeout:
@@ -466,8 +464,6 @@ def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] 
         output_filename = f"{video_base_name}_cut.mp4"
         final_output_path = output_dir / output_filename
 
-    logger.info("Cutting video from 0.0000s to %.4fs using FFmpeg", cut_timestamp)
-
     cmd = [
         "ffmpeg",
         "-i",
@@ -486,7 +482,7 @@ def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] 
         subprocess.run(
             cmd, check=True, capture_output=True, text=True, timeout=FFMPEG.TIMEOUT_SECONDS
         )
-        logger.info("Saved cut video (0.0000s - %.4fs) to: %s", cut_timestamp, final_output_path)
+        logger.info("Cut video saved (0.0000s - %.4fs) to: %s", cut_timestamp, final_output_path)
         return str(final_output_path)
 
     except FileNotFoundError:

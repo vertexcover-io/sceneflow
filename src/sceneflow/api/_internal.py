@@ -7,7 +7,7 @@ Use the public API functions from sceneflow.api instead.
 import logging
 from typing import List, Optional
 
-from sceneflow.detection import EnergyRefiner
+from sceneflow.detection import refine_speech_end
 from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
 from sceneflow.detection import SpeechDetector
 from sceneflow.selection import LLMFrameSelector
@@ -27,31 +27,27 @@ def detect_speech_end(
     Returns:
         speech_end_time: Final refined speech end time in seconds.
     """
-    logger.info("Stage 1: Detecting speech end time...")
-
     detector = SpeechDetector()
     vad_end_time, _ = detector.get_speech_end_time(video_path)
 
-    logger.info("VAD detected speech end at: %.4f s", vad_end_time)
+    logger.info("Speech end detected at: %.4fs (VAD)", vad_end_time)
 
     speech_end_time = vad_end_time
 
     if use_energy_refinement:
-        logger.info("Stage 1.5: Refining VAD-detected speech end time with energy analysis...")
-
-        refiner = EnergyRefiner(
+        result = refine_speech_end(
+            vad_timestamp=vad_end_time,
+            video_path=video_path,
             threshold_db=energy_threshold_db,
             lookback_frames=energy_lookback_frames,
         )
-
-        result = refiner.refine_speech_end(vad_end_time, video_path)
         frames_adjusted = result.vad_frame - result.refined_frame
-        if result.vad_frame - result.refined_frame > 0:
+        if frames_adjusted > 0:
             logger.info(
-                "Energy refinement adjusted timestamp by %d frames",
+                "Speech end refined to: %.4fs (adjusted %d frames backward using energy analysis)",
+                result.refined_timestamp,
                 frames_adjusted,
             )
-
         speech_end_time = result.refined_timestamp
     else:
         logger.debug("Energy refinement disabled.")

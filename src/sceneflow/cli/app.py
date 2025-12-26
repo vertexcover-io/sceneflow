@@ -53,13 +53,9 @@ def main(
             help="Save annotated frames with InsightFace 106 landmarks to output directory"
         ),
     ] = False,
-    save_video: Annotated[
-        bool,
-        cyclopts.Parameter(help="Save cut video from start to best timestamp (requires ffmpeg)"),
-    ] = False,
     output: Annotated[
         Optional[str],
-        cyclopts.Parameter(help="Output path for saved video (automatically enables --save-video)"),
+        cyclopts.Parameter(help="Output path for saved video (requires ffmpeg)"),
     ] = None,
     save_logs: Annotated[
         bool,
@@ -120,7 +116,7 @@ def main(
         sceneflow video.mp4 --verbose
         sceneflow video.mp4 --json-output ./output
         sceneflow https://example.com/video.mp4 --verbose
-        sceneflow video.mp4 --save-frames --save-video --save-logs
+        sceneflow video.mp4 --save-frames --save-logs
         sceneflow video.mp4 --output /path/to/my_output.mp4
         sceneflow video.mp4 --airtable --verbose
         sceneflow video.mp4 --use-llm-selection --verbose
@@ -163,12 +159,6 @@ def main(
 
         logger.info("Analyzing video: %s", Path(video_path).name)
 
-        if output and not save_video:
-            save_video = True
-            logger.info("Auto-enabling video save because output path was specified: %s", output)
-            if verbose:
-                print(f"Note: Automatically enabling video save to: {output}")
-
         if verbose:
             print_verbose_header(
                 video_path,
@@ -205,7 +195,6 @@ def main(
                 duration,
                 sample_rate,
                 save_frames,
-                save_video,
                 output,
                 save_logs,
                 need_internals,
@@ -226,14 +215,12 @@ def main(
                 video_path, ranked_frames, speech_end_time, duration, verbose
             )
 
-        if save_video and (use_llm_selection or airtable) and not top_n and ranker:
+        if output and (use_llm_selection or airtable) and not top_n and ranker:
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
 
         logger.info("Best cut point: %.4fs (score: %.4f)", best_frame.timestamp, best_frame.score)
 
-        print_results(
-            best_frame, ranked_frames, top_n, verbose, save_frames, save_video, video_path
-        )
+        print_results(best_frame, ranked_frames, top_n, verbose, save_frames, output, video_path)
 
         if airtable and not top_n and ranker:
             try:

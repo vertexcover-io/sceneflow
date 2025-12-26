@@ -10,7 +10,7 @@ from typing import List, Optional, Tuple
 
 from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
-from sceneflow.detection import SpeechDetector, EnergyRefiner
+from sceneflow.detection import SpeechDetector, refine_speech_end
 from sceneflow.selection import LLMFrameSelector
 
 logger = logging.getLogger(__name__)
@@ -70,10 +70,12 @@ def detect_speech_end_cli(
         if verbose:
             print("\n[1.5/2] Refining speech end time with energy analysis...")
 
-        refiner = EnergyRefiner(
-            threshold_db=energy_threshold_db, lookback_frames=energy_lookback_frames
+        result = refine_speech_end(
+            vad_timestamp=vad_speech_end_time,
+            video_path=source,
+            threshold_db=energy_threshold_db,
+            lookback_frames=energy_lookback_frames,
         )
-        result = refiner.refine_speech_end(vad_speech_end_time, source)
         speech_end_time = result.refined_timestamp
 
         if verbose and result.frames_adjusted > 0:
@@ -91,7 +93,6 @@ def rank_frames_cli(
     duration: float,
     sample_rate: int,
     save_frames: bool,
-    save_video: bool,
     output: Optional[str],
     save_logs: bool,
     need_internals: bool,
@@ -111,8 +112,7 @@ def rank_frames_cli(
         end_time=duration,
         sample_rate=sample_rate,
         save_frames=save_frames,
-        save_video=save_video if not need_internals else False,
-        output_path=output,
+        output_path=output if not need_internals else None,
         save_logs=save_logs,
     )
 
@@ -165,7 +165,7 @@ def print_results(
     top_n: Optional[int],
     verbose: bool,
     save_frames: bool,
-    save_video: bool,
+    output: Optional[str],
     source: str,
 ) -> None:
     """Print results based on mode (top-n, verbose, or simple)."""
@@ -189,15 +189,15 @@ def print_results(
             if len(ranked_frames) > n:
                 print(f"\n  ... and {len(ranked_frames) - n} more candidates")
 
-            if save_frames or save_video:
+            if save_frames or output:
                 print(f"\n{'=' * 60}")
                 print("OUTPUT FILES")
                 print(f"{'=' * 60}")
                 video_name = Path(source).stem
                 if save_frames:
                     print(f"Annotated frames: output/{video_name}/")
-                if save_video:
-                    print(f"Cut video: output/{video_name}_cut.mp4")
+                if output:
+                    print(f"Cut video: {output}")
         else:
             for i, frame in enumerate(ranked_frames[:n], 1):
                 print(f"{i}. {frame.timestamp:.4f}s (score: {frame.score:.4f})")
@@ -219,15 +219,15 @@ def print_results(
         if len(ranked_frames) > 3:
             print(f"\n  ... and {len(ranked_frames) - 3} more candidates")
 
-        if save_frames or save_video:
+        if save_frames or output:
             print(f"\n{'=' * 60}")
             print("OUTPUT FILES")
             print(f"{'=' * 60}")
             video_name = Path(source).stem
             if save_frames:
                 print(f"Annotated frames: output/{video_name}/")
-            if save_video:
-                print(f"Cut video: output/{video_name}_cut.mp4")
+            if output:
+                print(f"Cut video: {output}")
     else:
         print(f"{best_frame.timestamp:.4f}")
 

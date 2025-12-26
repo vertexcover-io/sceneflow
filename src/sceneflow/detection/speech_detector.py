@@ -5,6 +5,7 @@ ends in video or audio files using deep learning-based voice activity detection.
 """
 
 import logging
+import warnings
 from typing import Tuple
 
 import librosa
@@ -15,6 +16,9 @@ from sceneflow.shared.constants import VAD
 from sceneflow.shared.exceptions import VADModelError, AudioLoadError
 
 logger = logging.getLogger(__name__)
+
+warnings.filterwarnings("ignore", category=UserWarning, module="librosa")
+warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
 
 
 class SpeechDetector:
@@ -41,10 +45,9 @@ class SpeechDetector:
         Raises:
             VADModelError: If Silero VAD model fails to load
         """
-        logger.info("Loading Silero VAD model...")
         try:
             self.vad_model = load_silero_vad()
-            logger.info("Silero VAD model loaded successfully")
+            logger.info("Silero VAD model loaded")
         except Exception as e:
             logger.error("Failed to load Silero VAD model: %s", e)
             raise VADModelError(str(e)) from e
@@ -111,19 +114,11 @@ class SpeechDetector:
             >>> end_time, confidence = detector.get_speech_end_time("video.mp4", return_confidence=True)
             >>> print(f"Speech ends at {end_time:.2f}s (confidence: {confidence:.2f})")
         """
-        logger.info("Detecting speech end time in: %s", file_path)
-
         try:
             # Load audio for VAD
             wav, sample_rate = self._load_audio_for_vad(file_path)
 
             # Get speech timestamps using VAD
-            logger.debug(
-                "Running VAD with threshold=%.2f, neg_threshold=%.2f",
-                VAD.THRESHOLD,
-                VAD.NEG_THRESHOLD,
-            )
-
             speech_timestamps = get_speech_timestamps(
                 wav,
                 self.vad_model,
@@ -147,16 +142,17 @@ class SpeechDetector:
             last_speech_segment = speech_timestamps[-1]
             vad_end_time = float(last_speech_segment["end"])
 
-            logger.info(
-                "Last speech segment: %.3f-%.3fs", last_speech_segment["start"], vad_end_time
-            )
-
             # Calculate confidence based on VAD's detection quality
             # Higher confidence if the last segment is well-defined
             segment_duration = last_speech_segment["end"] - last_speech_segment["start"]
             confidence = min(1.0, segment_duration / VAD.MIN_SEGMENT_DURATION_FOR_FULL_CONFIDENCE)
 
-            logger.info("Speech ends at %.3fs (confidence: %.2f)", vad_end_time, confidence)
+            logger.info(
+                "VAD analysis complete: %d segments detected, speech ends at %.4fs (confidence: %.2f)",
+                len(speech_timestamps),
+                vad_end_time,
+                confidence,
+            )
 
             return vad_end_time, float(confidence)
 

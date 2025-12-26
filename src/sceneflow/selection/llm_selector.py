@@ -112,15 +112,24 @@ class LLMFrameSelector:
         try:
             selected_number = int(response_text)
             if 1 <= selected_number <= len(frames_data):
-                logger.debug(f"LLM selected frame {selected_number}")
+                selected_frame = frames_data[selected_number - 1]["frame"]
+                logger.info(
+                    "LLM selected frame %d at %.4fs (algorithmic rank: %d)",
+                    selected_number,
+                    selected_frame.timestamp,
+                    selected_frame.rank,
+                )
                 return selected_number - 1
             else:
                 logger.warning(
-                    f"LLM returned invalid frame number: {selected_number}, using top algorithmic result"
+                    "LLM returned invalid frame number: %d (expected 1-%d), using top algorithmic result",
+                    selected_number,
+                    len(frames_data),
                 )
                 return 0
         except ValueError:
             logger.warning(
-                f"LLM returned non-numeric response: {response_text}, using top algorithmic result"
+                "LLM returned non-numeric response: '%s', using top algorithmic result",
+                response_text,
             )
             return 0

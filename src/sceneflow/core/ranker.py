@@ -52,7 +52,6 @@ class CutPointRanker:
         end_time: float,
         sample_rate: int = 1,
         save_frames: bool = False,
-        save_video: bool = False,
         output_path: Optional[str] = None,
         save_logs: bool = False,
         vad_timestamps: Optional[List[Dict[str, float]]] = None,
@@ -66,8 +65,7 @@ class CutPointRanker:
             end_time: End timestamp in seconds
             sample_rate: Process every Nth frame (1 = all frames)
             save_frames: If True, save annotated frames
-            save_video: If True, cut video from start to best timestamp
-            output_path: Optional custom path for saved video
+            output_path: If provided, saves cut video to this path
             save_logs: If True, save detailed logs
             vad_timestamps: Optional list of VAD speech segments to include in logs
 
@@ -75,10 +73,6 @@ class CutPointRanker:
             List of RankedFrame sorted by score (best first).
             Access last_features and last_scores attributes for internals.
         """
-        logger.info(
-            "Ranking frames in range %.4f-%.4fs (sample_rate=%d)", start_time, end_time, sample_rate
-        )
-
         # Extract features from all frames
         features = self._extract_features(video_path, start_time, end_time, sample_rate)
 
@@ -106,12 +100,6 @@ class CutPointRanker:
             for i, score in enumerate(sorted_scores)
         ]
 
-        logger.info(
-            "Best cut point: %.4fs (score: %.3f)",
-            ranked_frames[0].timestamp,
-            ranked_frames[0].score,
-        )
-
         # Optional outputs
         if save_frames:
             self._save_ranked_frames(video_path, ranked_frames)
@@ -120,7 +108,7 @@ class CutPointRanker:
         if save_logs:
             self._save_frame_logs(video_path, ranked_frames, features, scores, vad_timestamps)
 
-        if save_video and ranked_frames:
+        if output_path and ranked_frames:
             self._save_cut_video(video_path, ranked_frames[0].timestamp, output_path=output_path)
 
         # Store internals for later access
@@ -148,8 +136,6 @@ class CutPointRanker:
 
         start_frame = int(start_time * fps)
         end_frame = int(end_time * fps)
-
-        logger.info("Extracting features from frames %d to %d", start_frame, end_frame)
 
         with VideoCapture(video_path) as cap:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -193,8 +179,6 @@ class CutPointRanker:
         output_dir = Path("output") / video_base_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Saving %d frames to: %s", len(ranked_frames), output_dir)
-
         with VideoCapture(video_path) as cap:
             for ranked_frame in ranked_frames:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, ranked_frame.frame_index)
@@ -213,7 +197,7 @@ class CutPointRanker:
                 )
                 cv2.imwrite(str(output_dir / output_filename), annotated_frame)
 
-        logger.info("Saved frames to: %s", output_dir)
+        logger.info("Saved %d annotated frames to: %s", len(ranked_frames), output_dir)
 
     # def _save_scores_txt(
     #     self,

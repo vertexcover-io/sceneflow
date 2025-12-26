@@ -69,16 +69,11 @@ def analyze_and_upload_to_airtable(
         ... )
         >>> print(f"Cut at {timestamp:.2f}s, uploaded to {record_id}")
     """
-    logger.info("SceneFlow: Analyzing video and uploading to Airtable")
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         # Stage 1: Detect speech end
@@ -97,8 +92,6 @@ def analyze_and_upload_to_airtable(
 
         # Stage 2: Rank frames with internals for upload
         duration = get_video_duration(video_path)
-        logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
 
         ranker = CutPointRanker(config)
         ranked_frames = ranker.rank_frames(
@@ -133,8 +126,6 @@ def analyze_and_upload_to_airtable(
             )
 
         # Stage 4: Upload to Airtable
-        logger.info("Stage 4: Uploading results to Airtable...")
-
         best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
         best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
 
@@ -157,7 +148,7 @@ def analyze_and_upload_to_airtable(
         )
 
         logger.info(
-            "Successfully uploaded: timestamp=%.4fs, record_id=%s",
+            "Uploaded to Airtable: timestamp=%.4fs, record_id=%s",
             best_frame.timestamp,
             record_id,
         )
@@ -211,16 +202,11 @@ def analyze_ranked_and_upload_to_airtable(
         ... )
         >>> print(f"Top 5: {timestamps}, uploaded best to {record_id}")
     """
-    logger.info("SceneFlow: Finding top %d cut points and uploading to Airtable", n)
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         # Stage 1: Detect speech end
@@ -239,8 +225,6 @@ def analyze_ranked_and_upload_to_airtable(
 
         # Stage 2: Rank frames with internals for upload
         duration = get_video_duration(video_path)
-        logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
 
         ranker = CutPointRanker(config)
         ranked_frames = ranker.rank_frames(
@@ -261,8 +245,6 @@ def analyze_ranked_and_upload_to_airtable(
             raise RuntimeError("Failed to extract frame features and scores")
 
         # Stage 3: Upload best result to Airtable
-        logger.info("Stage 3: Uploading best result to Airtable...")
-
         best_frame = ranked_frames[0]
         best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
         best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
@@ -287,7 +269,12 @@ def analyze_ranked_and_upload_to_airtable(
 
         # Return top N timestamps
         top_timestamps = [frame.timestamp for frame in ranked_frames[:n]]
-        logger.info("Top %d cut points found and uploaded best to Airtable", len(top_timestamps))
+        logger.info(
+            "Uploaded to Airtable: top %d cut points, best at %.4fs, record_id=%s",
+            len(top_timestamps),
+            top_timestamps[0],
+            record_id,
+        )
         return top_timestamps, record_id
 
     finally:
@@ -345,16 +332,11 @@ def cut_and_upload_to_airtable(
         ...     airtable_base_id="appXXXXXXXXXXXXXX"
         ... )
     """
-    logger.info("SceneFlow: Cutting video and uploading to Airtable")
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         # Stage 1: Detect speech end
@@ -382,8 +364,7 @@ def cut_and_upload_to_airtable(
             "end_time": duration,
             "sample_rate": sample_rate,
             "save_frames": save_frames,
-            "save_video": not use_llm_selection,
-            "output_path": output_path if not use_llm_selection else None,
+            "output_path": None if use_llm_selection else output_path,
         }
 
         if save_logs:
@@ -420,8 +401,6 @@ def cut_and_upload_to_airtable(
             ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output_path)
 
         # Stage 4: Upload to Airtable
-        logger.info("Stage 4: Uploading results to Airtable...")
-
         best_score = next((s for s in scores if s.frame_index == best_frame.frame_index), None)
         best_features = next((f for f in features if f.frame_index == best_frame.frame_index), None)
 
@@ -444,7 +423,7 @@ def cut_and_upload_to_airtable(
         )
 
         logger.info(
-            "Successfully cut video and uploaded: timestamp=%.4fs, record_id=%s",
+            "Cut video and uploaded to Airtable: timestamp=%.4fs, record_id=%s",
             best_frame.timestamp,
             record_id,
         )

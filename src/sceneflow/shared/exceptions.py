@@ -70,25 +70,6 @@ class FeatureExtractionError(SceneFlowError):
     pass
 
 
-class NoFaceDetectedError(FeatureExtractionError):
-    """Raised when no face is detected in a frame."""
-
-    def __init__(self, frame_index: int = None):
-        self.frame_index = frame_index
-        msg = "No face detected in frame"
-        if frame_index is not None:
-            msg += f" {frame_index}"
-        super().__init__(msg)
-
-
-class LandmarkDetectionError(FeatureExtractionError):
-    """Raised when facial landmark detection fails."""
-
-    def __init__(self, reason: str):
-        self.reason = reason
-        super().__init__(f"Landmark detection failed: {reason}")
-
-
 class InsightFaceError(FeatureExtractionError):
     """Raised when InsightFace model fails to load or execute."""
 
@@ -120,52 +101,7 @@ class AudioLoadError(SpeechDetectionError):
         super().__init__(f"Failed to load audio from {path}: {reason}")
 
 
-class NoSpeechDetectedError(SpeechDetectionError):
-    """Raised when no speech is detected in audio."""
-
-    def __init__(self, path: str):
-        self.path = path
-        super().__init__(f"No speech detected in video: {path}")
-
-
-class ConfigurationError(SceneFlowError):
-    """Base exception for configuration errors."""
-
-    pass
-
-
-class InvalidConfigError(ConfigurationError):
-    """Raised when configuration is invalid."""
-
-    def __init__(self, reason: str):
-        self.reason = reason
-        super().__init__(f"Invalid configuration: {reason}")
-
-
-class WeightSumError(ConfigurationError):
-    """Raised when scoring weights don't sum to 1.0."""
-
-    def __init__(self, total: float):
-        self.total = total
-        super().__init__(f"Scoring weights must sum to 1.0, got {total:.4f}")
-
-
-class WindowSizeError(ConfigurationError):
-    """Raised when window size is not odd."""
-
-    def __init__(self, window_name: str, size: int):
-        self.window_name = window_name
-        self.size = size
-        super().__init__(f"{window_name} must be odd, got {size}")
-
-
-class RankingError(SceneFlowError):
-    """Base exception for ranking errors."""
-
-    pass
-
-
-class NoValidFramesError(RankingError):
+class NoValidFramesError(SceneFlowError):
     """Raised when no valid frames found for ranking."""
 
     def __init__(self, reason: str = ""):
@@ -173,15 +109,6 @@ class NoValidFramesError(RankingError):
         if reason:
             msg += f": {reason}"
         super().__init__(msg)
-
-
-class InsufficientFramesError(RankingError):
-    """Raised when insufficient frames available for analysis."""
-
-    def __init__(self, required: int, available: int):
-        self.required = required
-        self.available = available
-        super().__init__(f"Insufficient frames: required {required}, available {available}")
 
 
 class SecurityError(SceneFlowError):
@@ -205,37 +132,6 @@ class InvalidURLError(SecurityError):
         self.url = url
         self.reason = reason
         super().__init__(f"Invalid URL '{url}': {reason}")
-
-
-class APIError(SceneFlowError):
-    """Base exception for external API errors."""
-
-    pass
-
-
-class LLMError(APIError):
-    """Raised when LLM API call fails."""
-
-    def __init__(self, reason: str):
-        self.reason = reason
-        super().__init__(f"LLM API error: {reason}")
-
-
-class AirtableError(APIError):
-    """Raised when Airtable API call fails."""
-
-    def __init__(self, reason: str):
-        self.reason = reason
-        super().__init__(f"Airtable API error: {reason}")
-
-
-class MissingAPIKeyError(APIError):
-    """Raised when required API key is missing."""
-
-    def __init__(self, service: str, env_var: str):
-        self.service = service
-        self.env_var = env_var
-        super().__init__(f"{service} API key not found. Set {env_var} environment variable.")
 
 
 class FFmpegError(SceneFlowError):

@@ -78,9 +78,10 @@ def detect_speech_end_cli(
         )
         speech_end_time = result.refined_timestamp
 
-        if verbose and result.frames_adjusted > 0:
+        frames_adjusted = result.vad_frame - result.refined_frame
+        if verbose and frames_adjusted > 0:
             print(
-                f"      Adjusted by {result.frames_adjusted} frames "
+                f"      Adjusted by {frames_adjusted} frames "
                 f"(energy drop: {result.energy_drop_db:.2f} dB)"
             )
 

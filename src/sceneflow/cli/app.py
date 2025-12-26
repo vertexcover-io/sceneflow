@@ -14,15 +14,15 @@ from sceneflow.utils.video import (
     is_url,
     download_video,
     cleanup_downloaded_video,
-    get_video_duration,
+    get_video_properties,
     validate_video_path,
     cut_video,
 )
-from sceneflow.cli._internal import (
+
+from sceneflow.shared.pipeline import detect_speech_end, select_best_with_llm
+from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
+from sceneflow.utils.formatting import (
     print_verbose_header,
-    detect_speech_end_cli,
-    rank_frames_cli,
-    apply_llm_selection_cli,
     print_results,
     save_json_output,
 )
@@ -169,8 +169,11 @@ def main(
                 energy_lookback_frames,
             )
 
-        speech_end_time, confidence = detect_speech_end_cli(
-            video_path, no_energy_refinement, energy_threshold_db, energy_lookback_frames, verbose
+        speech_end_time, confidence = detect_speech_end(
+            video_path,
+            use_energy_refinement=not no_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
         )
 
         if disable_visual_analysis:
@@ -184,23 +187,34 @@ def main(
             ]
             ranker = None
         else:
-            duration = get_video_duration(video_path)
+            duration = get_video_properties(video_path).duration
 
             if verbose:
                 print(f"      Video duration: {duration:.4f}s")
+                print(
+                    f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s..."
+                )
+
+            ranker = CutPointRanker()
+            result = ranker.rank_frames(
+                video_path=video_path,
+                start_time=speech_end_time,
+                end_time=duration,
+                sample_rate=sample_rate,
+            )
+
+            ranked_frames = result.ranked_frames
+
+            # Handle side effects
+            if save_frames:
+                save_annotated_frames(video_path, result.ranked_frames, ranker.extractor)
+
+            if save_logs and result.features and result.scores:
+                save_analysis_logs(video_path, result.ranked_frames, result.features, result.scores)
 
             need_internals = use_llm_selection or airtable or json_output
-            ranked_frames, ranker = rank_frames_cli(
-                video_path,
-                speech_end_time,
-                duration,
-                sample_rate,
-                save_frames,
-                output,
-                save_logs,
-                need_internals,
-                verbose,
-            )
+            if output and not need_internals:
+                cut_video(video_path, result.ranked_frames[0].timestamp, output)
 
         if not ranked_frames:
             logger.error("No suitable cut points found")
@@ -212,9 +226,22 @@ def main(
         best_frame = ranked_frames[0]
 
         if use_llm_selection and len(ranked_frames) > 1 and not top_n:
-            best_frame = apply_llm_selection_cli(
-                video_path, ranked_frames, speech_end_time, duration, verbose
+            if verbose:
+                print("\n[3/3] Using LLM to select best frame from top 5 candidates...")
+
+            best_frame = select_best_with_llm(
+                video_path=video_path,
+                ranked_frames=ranked_frames,
+                speech_end_time=speech_end_time,
+                duration=duration,
+                openai_api_key=None,  # Will use env var
             )
+
+            if verbose:
+                print(
+                    f"      LLM selected frame at {best_frame.timestamp:.4f}s "
+                    f"(frame {best_frame.frame_index})"
+                )
 
         if output and (use_llm_selection or airtable) and not top_n and ranker:
             cut_video(video_path, best_frame.timestamp, output)

@@ -9,6 +9,7 @@ import warnings
 from typing import Tuple
 
 import librosa
+import asyncio
 import torch
 from silero_vad import load_silero_vad, get_speech_timestamps
 
@@ -88,39 +89,31 @@ class SpeechDetector:
             logger.error("Failed to load audio from %s: %s", file_path, e)
             raise AudioLoadError(file_path, str(e)) from e
 
+    def _process_vad_results(self, speech_timestamps: list, file_path: str) -> Tuple[float, float]:
+        logger.debug("VAD detected %d speech segments", len(speech_timestamps))
+
+        if not speech_timestamps:
+            logger.warning("No speech detected in %s", file_path)
+            return 0.0, 0.0
+
+        last_speech_segment = speech_timestamps[-1]
+        vad_end_time = float(last_speech_segment["end"])
+
+        segment_duration = last_speech_segment["end"] - last_speech_segment["start"]
+        confidence = min(1.0, segment_duration / VAD.MIN_SEGMENT_DURATION_FOR_FULL_CONFIDENCE)
+
+        logger.info(
+            "VAD analysis complete: %d segments detected, speech ends at %.4fs (confidence: %.2f)",
+            len(speech_timestamps),
+            vad_end_time,
+            confidence,
+        )
+
+        return vad_end_time, float(confidence)
+
     def get_speech_end_time(self, file_path: str) -> Tuple[float, float]:
-        """
-        Get speech end time using Silero VAD (Voice Activity Detection).
-
-        This method uses deep learning for highly accurate speech/silence detection.
-        It identifies all speech segments in the audio and returns the end timestamp
-        of the last detected speech segment.
-
-        Args:
-            file_path: Path to video or audio file
-
-        Returns:
-            returns (timestamp, confidence_score) tuple.
-
-        Raises:
-            AudioLoadError: If audio cannot be loaded from file
-            VADModelError: If VAD processing fails
-
-        Example:
-            >>> detector = SpeechDetector()
-            >>> # Simple usage
-            >>> end_time = detector.get_speech_end_time("video.mp4")
-            >>> print(f"Speech ends at {end_time:.2f}s")
-            >>>
-            >>> # With confidence score
-            >>> end_time, confidence = detector.get_speech_end_time("video.mp4", return_confidence=True)
-            >>> print(f"Speech ends at {end_time:.2f}s (confidence: {confidence:.2f})")
-        """
         try:
-            # Load audio for VAD
             wav, sample_rate = self._load_audio_for_vad(file_path)
-
-            # Get speech timestamps using VAD
             speech_timestamps = get_speech_timestamps(
                 wav,
                 self.vad_model,
@@ -132,92 +125,31 @@ class SpeechDetector:
                 speech_pad_ms=VAD.SPEECH_PAD_MS,
                 time_resolution=VAD.TIME_RESOLUTION,
             )
-
-            logger.debug("VAD detected %d speech segments", len(speech_timestamps))
-
-            if not speech_timestamps:
-                # No speech detected
-                logger.warning("No speech detected in %s", file_path)
-                return 0.0, 0.0
-
-            # Get the end time of the last speech segment
-            last_speech_segment = speech_timestamps[-1]
-            vad_end_time = float(last_speech_segment["end"])
-
-            # Calculate confidence based on VAD's detection quality
-            # Higher confidence if the last segment is well-defined
-            segment_duration = last_speech_segment["end"] - last_speech_segment["start"]
-            confidence = min(1.0, segment_duration / VAD.MIN_SEGMENT_DURATION_FOR_FULL_CONFIDENCE)
-
-            logger.info(
-                "VAD analysis complete: %d segments detected, speech ends at %.4fs (confidence: %.2f)",
-                len(speech_timestamps),
-                vad_end_time,
-                confidence,
-            )
-
-            return vad_end_time, float(confidence)
-
+            return self._process_vad_results(speech_timestamps, file_path)
         except AudioLoadError:
-            # Re-raise audio loading errors
             raise
         except Exception as e:
             logger.error("VAD speech detection failed: %s", e)
             raise VADModelError(f"Speech detection failed: {str(e)}") from e
 
-    # def get_speech_timestamps(
-    #     self,
-    #     file_path: str
-    # ) -> Tuple[float]:
-    #     """
-    #     Get speech end time and all speech segment timestamps using Silero VAD.
-
-    #     Args:
-    #         file_path: Path to video or audio file
-
-    #     Returns:
-    #         Tuple of (speech_end_time, list of speech segments).
-    #         Each segment is a SpeechSegment dataclass with start and end timestamps in seconds.
-
-    #     Raises:
-    #         AudioLoadError: If audio cannot be loaded from file
-    #         VADModelError: If VAD processing fails
-    #     """
-    #     logger.info("Detecting speech timestamps in: %s", file_path)
-
-    #     try:
-    #         wav, sample_rate = self._load_audio_for_vad(file_path)
-
-    #         speech_timestamps = get_speech_timestamps(
-    #             wav,
-    #             self.vad_model,
-    #             return_seconds=True,
-    #             sampling_rate=sample_rate,
-    #             threshold=VAD.THRESHOLD,
-    #             neg_threshold=VAD.NEG_THRESHOLD,
-    #             min_silence_duration_ms=VAD.MIN_SILENCE_DURATION_MS,
-    #             speech_pad_ms=VAD.SPEECH_PAD_MS,
-    #             time_resolution=VAD.TIME_RESOLUTION
-    #         )
-
-    #         logger.debug("VAD detected %d speech segments", len(speech_timestamps))
-
-    #         if not speech_timestamps:
-    #             logger.warning("No speech detected in %s", file_path)
-    #             return 0.0, []
-
-    #         segments = [
-    #             SpeechSegment(start=float(seg["start"]), end=float(seg["end"]))
-    #             for seg in speech_timestamps
-    #         ]
-
-    #         vad_end_time = segments[-1].end
-    #         logger.info("Speech ends at %.3fs, %d segments detected", vad_end_time, len(segments))
-
-    #         return vad_end_time, segments
-
-    #     except AudioLoadError:
-    #         raise
-    #     except Exception as e:
-    #         logger.error("VAD speech detection failed: %s", e)
-    #         raise VADModelError(f"Speech detection failed: {str(e)}") from e
+    async def get_speech_end_time_async(self, file_path: str) -> Tuple[float, float]:
+        try:
+            wav, sample_rate = await asyncio.to_thread(self._load_audio_for_vad, file_path)
+            speech_timestamps = await asyncio.to_thread(
+                get_speech_timestamps,
+                wav,
+                self.vad_model,
+                return_seconds=True,
+                sampling_rate=sample_rate,
+                threshold=VAD.THRESHOLD,
+                neg_threshold=VAD.NEG_THRESHOLD,
+                min_silence_duration_ms=VAD.MIN_SILENCE_DURATION_MS,
+                speech_pad_ms=VAD.SPEECH_PAD_MS,
+                time_resolution=VAD.TIME_RESOLUTION,
+            )
+            return self._process_vad_results(speech_timestamps, file_path)
+        except AudioLoadError:
+            raise
+        except Exception as e:
+            logger.error("VAD speech detection failed: %s", e)
+            raise VADModelError(f"Speech detection failed: {str(e)}") from e

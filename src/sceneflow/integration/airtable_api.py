@@ -17,7 +17,7 @@ from sceneflow.utils.video import (
     is_url,
     download_video,
     cleanup_downloaded_video,
-    get_video_duration,
+    get_video_properties,
     cut_video,
 )
 from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
@@ -93,7 +93,7 @@ def analyze_and_upload_to_airtable(
             raise ValueError("Cannot upload to Airtable when visual analysis is disabled")
 
         # Stage 2: Rank frames with internals for upload
-        duration = get_video_duration(video_path)
+        duration = get_video_properties(video_path).duration
 
         ranker = CutPointRanker(config)
         result = ranker.rank_frames(
@@ -118,8 +118,6 @@ def analyze_and_upload_to_airtable(
                 result.ranked_frames,
                 speech_end_time,
                 duration,
-                result.scores,
-                result.features,
                 openai_api_key,
             )
 
@@ -226,7 +224,7 @@ def analyze_ranked_and_upload_to_airtable(
             raise ValueError("Cannot upload to Airtable when visual analysis is disabled")
 
         # Stage 2: Rank frames with internals for upload
-        duration = get_video_duration(video_path)
+        duration = get_video_properties(video_path).duration
 
         ranker = CutPointRanker(config)
         result = ranker.rank_frames(
@@ -356,7 +354,7 @@ def cut_and_upload_to_airtable(
             raise ValueError("Cannot upload to Airtable when visual analysis is disabled")
 
         # Stage 2: Rank frames with internals for upload
-        duration = get_video_duration(video_path)
+        duration = get_video_properties(video_path).duration
 
         ranker = CutPointRanker(config)
         result = ranker.rank_frames(
@@ -381,8 +379,6 @@ def cut_and_upload_to_airtable(
                 result.ranked_frames,
                 speech_end_time,
                 duration,
-                result.scores,
-                result.features,
                 openai_api_key,
             )
 

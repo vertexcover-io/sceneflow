@@ -1,19 +1,12 @@
-"""Internal helper functions for SceneFlow CLI.
-
-This module contains implementation details and should not be imported directly.
-"""
+"""CLI formatting and output utilities for SceneFlow."""
 
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from sceneflow.shared.models import RankedFrame
 from sceneflow.core import CutPointRanker
-from sceneflow.detection import SpeechDetector, refine_speech_end
-from sceneflow.selection import LLMFrameSelector
-from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
-from sceneflow.utils.video import cut_video
 
 logger = logging.getLogger(__name__)
 
@@ -41,132 +34,6 @@ def print_verbose_header(
             f"\nEnergy refinement: ENABLED "
             f"(threshold={energy_threshold_db} dB, lookback={energy_lookback_frames} frames)"
         )
-
-
-def detect_speech_end_cli(
-    source: str,
-    no_energy_refinement: bool,
-    energy_threshold_db: float,
-    energy_lookback_frames: int,
-    verbose: bool,
-) -> Tuple[float, float]:
-    """Detect speech end time with CLI-specific logging.
-
-    Returns:
-        Tuple of (speech_end_time, confidence) where:
-        - speech_end_time: Final refined timestamp in seconds (after energy refinement if enabled)
-        - confidence: Detection confidence score (0.0-1.0)
-    """
-    if verbose:
-        print("\n[1/2] Detecting speech end time using VAD...")
-
-    detector = SpeechDetector()
-    vad_speech_end_time, confidence = detector.get_speech_end_time(file_path=source)
-
-    if verbose:
-        print(f"      Speech ends at: {vad_speech_end_time:.4f}s (confidence: {confidence:.2f})")
-
-    speech_end_time = vad_speech_end_time
-
-    if not no_energy_refinement:
-        if verbose:
-            print("\n[1.5/2] Refining speech end time with energy analysis...")
-
-        result = refine_speech_end(
-            vad_timestamp=vad_speech_end_time,
-            video_path=source,
-            threshold_db=energy_threshold_db,
-            lookback_frames=energy_lookback_frames,
-        )
-        speech_end_time = result.refined_timestamp
-
-        frames_adjusted = result.vad_frame - result.refined_frame
-        if verbose and frames_adjusted > 0:
-            print(
-                f"      Adjusted by {frames_adjusted} frames "
-                f"(energy drop: {result.energy_drop_db:.2f} dB)"
-            )
-
-    return speech_end_time, confidence
-
-
-def rank_frames_cli(
-    source: str,
-    speech_end_time: float,
-    duration: float,
-    sample_rate: int,
-    save_frames: bool,
-    output: Optional[str],
-    save_logs: bool,
-    need_internals: bool,
-    verbose: bool,
-) -> Tuple[List[RankedFrame], CutPointRanker]:
-    """Rank frames with CLI-specific logging."""
-    if verbose:
-        print(
-            f"\n[2/2] Analyzing visual features from {speech_end_time:.4f}s to {duration:.4f}s..."
-        )
-
-    ranker = CutPointRanker()
-
-    result = ranker.rank_frames(
-        video_path=source,
-        start_time=speech_end_time,
-        end_time=duration,
-        sample_rate=sample_rate,
-    )
-
-    # Handle side effects
-    if save_frames:
-        save_annotated_frames(source, result.ranked_frames, ranker.extractor)
-
-    if save_logs and result.features and result.scores:
-        save_analysis_logs(source, result.ranked_frames, result.features, result.scores)
-
-    if output and not need_internals:
-        cut_video(source, result.ranked_frames[0].timestamp, output)
-
-    return result.ranked_frames, ranker
-
-
-def apply_llm_selection_cli(
-    source: str,
-    ranked_frames: List[RankedFrame],
-    speech_end_time: float,
-    duration: float,
-    verbose: bool,
-) -> RankedFrame:
-    """Apply LLM selection with CLI-specific logging."""
-    if len(ranked_frames) < 2:
-        return ranked_frames[0]
-
-    try:
-        if verbose:
-            print("\n[3/3] Using LLM to select best frame from top 5 candidates...")
-
-        selector = LLMFrameSelector()
-        best_frame = selector.select_best_frame(
-            video_path=source,
-            ranked_frames=ranked_frames[:5],
-            speech_end_time=speech_end_time,
-            video_duration=duration,
-        )
-
-        if verbose:
-            print(
-                f"      LLM selected frame at {best_frame.timestamp:.4f}s "
-                f"(frame {best_frame.frame_index})"
-            )
-
-        logger.info("LLM selected frame at %.4fs", best_frame.timestamp)
-        return best_frame
-
-    except Exception as e:
-        logger.warning("LLM selection failed: %s, using top algorithmic result", e)
-        if verbose:
-            print(f"      LLM selection failed: {e}")
-            print("      Falling back to top algorithmic result")
-        return ranked_frames[0]
 
 
 def print_results(

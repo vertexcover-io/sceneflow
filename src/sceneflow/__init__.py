@@ -7,14 +7,21 @@ and temporal stability.
 """
 
 # Main public API
-from sceneflow.api import get_cut_frame, get_ranked_cut_frames, cut_video
+from sceneflow.api import (
+    get_cut_frame,
+    get_ranked_cut_frames,
+    cut_video,
+    get_cut_frame_async,
+    get_ranked_cut_frames_async,
+    cut_video_async,
+)
 
 # Shared foundational modules (re-exported for convenience)
 from sceneflow.shared import RankingConfig, FrameFeatures, FrameScore, RankedFrame
 
 # Core classes
 from sceneflow.core import CutPointRanker
-from sceneflow.detection import SpeechDetector, refine_speech_end
+from sceneflow.detection import SpeechDetector, refine_speech_end, refine_speech_end_async
 
 # Airtable integration (optional - only import if available)
 try:
@@ -38,14 +45,19 @@ except ImportError:
 __version__ = "0.1.0"
 
 __all__ = [
-    # Main API functions
+    # Main API functions (sync)
     "get_cut_frame",
     "get_ranked_cut_frames",
     "cut_video",
+    # Main API functions (async)
+    "get_cut_frame_async",
+    "get_ranked_cut_frames_async",
+    "cut_video_async",
     # Core classes
     "CutPointRanker",
     "SpeechDetector",
     "refine_speech_end",
+    "refine_speech_end_async",
     # Configuration
     "RankingConfig",
     # Data models

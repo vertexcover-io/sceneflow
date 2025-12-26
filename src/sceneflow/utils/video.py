@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 from contextlib import contextmanager, asynccontextmanager
+import subprocess
+from sceneflow.shared.constants import FFMPEG
+from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
+
 
 import aiofiles
 import cv2
@@ -341,29 +345,6 @@ def get_video_properties(video_path: str) -> VideoProperties:
         )
 
 
-def get_video_duration(video_path: str) -> float:
-    """
-    Get video duration in seconds.
-
-    Args:
-        video_path: Path to video file
-
-    Returns:
-        Duration in seconds
-
-    Raises:
-        VideoOpenError: If video cannot be opened
-        VideoPropertiesError: If video has invalid properties
-
-    Example:
-        >>> duration = get_video_duration("video.mp4")
-        >>> print(f"{duration:.2f}s")
-        10.50s
-    """
-    props = get_video_properties(video_path)
-    return props.duration
-
-
 def extract_frame(
     video_path: str, frame_index: int, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
 ) -> bytes:
@@ -431,32 +412,7 @@ def extract_frame_at_timestamp(
     return extract_frame(video_path, frame_index, jpeg_quality)
 
 
-def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] = None) -> str:
-    """
-    Cut video from start to the specified timestamp using FFmpeg.
-
-    Args:
-        video_path: Path to input video file
-        cut_timestamp: Timestamp where to cut the video (in seconds)
-        output_path: Optional custom output path for the cut video.
-                    If None, saves to output/<video_name>_cut.mp4
-
-    Returns:
-        Path to the saved cut video
-
-    Raises:
-        FFmpegNotFoundError: If ffmpeg is not installed
-        FFmpegExecutionError: If ffmpeg command fails
-
-    Example:
-        >>> output = cut_video("video.mp4", 5.5)
-        >>> print(output)
-        output/video_cut.mp4
-    """
-    import subprocess
-    from sceneflow.shared.constants import FFMPEG
-    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
-
+def _resolve_output_path(video_path: str, output_path: Optional[str]) -> Path:
     if output_path:
         final_output_path = Path(output_path)
         final_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,7 +422,11 @@ def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] 
         output_dir.mkdir(parents=True, exist_ok=True)
         output_filename = f"{video_base_name}_cut.mp4"
         final_output_path = output_dir / output_filename
+    return final_output_path
 
+
+def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] = None) -> str:
+    final_output_path = _resolve_output_path(video_path, output_path)
     cmd = [
         "ffmpeg",
         "-i",
@@ -478,7 +438,7 @@ def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] 
         "-c:a",
         FFMPEG.AUDIO_CODEC,
         "-y",
-        str(final_output_path),
+        output_path,
     ]
 
     try:
@@ -520,9 +480,6 @@ def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
         >>> len(video_bytes)
         123456
     """
-    import subprocess
-    from sceneflow.shared.constants import FFMPEG
-    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
         temp_path = temp_file.name
@@ -699,8 +656,6 @@ async def cut_video_async(
         FFmpegNotFoundError: If ffmpeg is not installed
         FFmpegExecutionError: If ffmpeg command fails
     """
-    from sceneflow.shared.constants import FFMPEG
-    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
 
     if output_path:
         final_output_path = Path(output_path)
@@ -734,7 +689,7 @@ async def cut_video_async(
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(
+            _, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=FFMPEG.TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
@@ -756,72 +711,20 @@ async def cut_video_async(
         raise FFmpegNotFoundError()
 
 
-async def cut_video_to_bytes_async(video_path: str, cut_timestamp: float) -> bytes:
+async def get_video_properties_async(video_path: str) -> VideoProperties:
     """
-    Async version of cut_video_to_bytes.
+    Async version of get_video_properties.
 
-    Cut video from start to timestamp and return as bytes.
+    Extract video properties (fps, frame count, duration, dimensions).
 
     Args:
-        video_path: Path to input video file
-        cut_timestamp: Timestamp where to cut the video (in seconds)
+        video_path: Path to video file
 
     Returns:
-        Cut video as bytes
+        VideoProperties dataclass with fps, frame_count, duration, width, height
 
     Raises:
-        FFmpegNotFoundError: If ffmpeg is not installed
-        FFmpegExecutionError: If ffmpeg command fails
+        VideoOpenError: If video cannot be opened
+        VideoPropertiesError: If video has invalid properties
     """
-    from sceneflow.shared.constants import FFMPEG
-    from sceneflow.shared.exceptions import FFmpegNotFoundError, FFmpegExecutionError
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
-        temp_path = temp_file.name
-
-    try:
-        cmd = [
-            "ffmpeg",
-            "-i",
-            video_path,
-            "-t",
-            f"{cut_timestamp:.6f}",
-            "-c:v",
-            FFMPEG.VIDEO_CODEC,
-            "-c:a",
-            FFMPEG.AUDIO_CODEC,
-            "-y",
-            temp_path,
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=FFMPEG.TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise FFmpegExecutionError(
-                " ".join(cmd), f"Timeout after {FFMPEG.TIMEOUT_SECONDS} seconds"
-            )
-
-        if process.returncode != 0:
-            stderr_text = stderr.decode() if stderr else ""
-            raise FFmpegExecutionError(" ".join(cmd), stderr_text)
-
-        async with aiofiles.open(temp_path, "rb") as f:
-            return await f.read()
-
-    except FileNotFoundError:
-        raise FFmpegNotFoundError()
-    finally:
-        try:
-            Path(temp_path).unlink()
-        except Exception:
-            pass
+    return await asyncio.to_thread(get_video_properties, video_path)

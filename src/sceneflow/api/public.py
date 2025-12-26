@@ -15,7 +15,9 @@ from sceneflow.utils.video import (
     download_video,
     cleanup_downloaded_video,
     get_video_duration,
+    cut_video as _cut_video_util,
 )
+from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
 from sceneflow.api._internal import (
     detect_speech_end,
     select_best_with_llm,
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def get_cut_frame(
     source: str,
-    config: Optional[RankingConfig] = None,
+    ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
     use_llm_selection: bool = False,
     openai_api_key: Optional[str] = None,
@@ -39,7 +41,7 @@ def get_cut_frame(
 
     Args:
         source: Video file path or direct video URL
-        config: Optional custom RankingConfig for scoring weights
+        ranking_config: Optional custom RankingConfig for scoring weights
         sample_rate: Process every Nth frame (default: 1)
         use_llm_selection: If True, uses LLM to select best frame from top 5
         openai_api_key: OpenAI API key (or use OPENAI_API_KEY env var)
@@ -55,16 +57,11 @@ def get_cut_frame(
         For Airtable integration, use analyze_and_upload_to_airtable() from
         sceneflow.integration instead.
     """
-    logger.info("SceneFlow: Finding optimal cut point")
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         speech_end_time = detect_speech_end(
@@ -82,39 +79,33 @@ def get_cut_frame(
 
         duration = get_video_duration(video_path)
 
-        logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
-
-        ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
+        ranker = CutPointRanker(ranking_config)
+        result = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
         )
 
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        best_frame = ranked_frames[0]
+        best_frame = result.ranked_frames[0]
 
-        if use_llm_selection and len(ranked_frames) > 1:
-            features = ranker.last_features
-            scores = ranker.last_scores
-
-            if features and scores:
+        if use_llm_selection and len(result.ranked_frames) > 1:
+            if result.features and result.scores:
                 best_frame = select_best_with_llm(
                     video_path,
-                    ranked_frames,
+                    result.ranked_frames,
                     speech_end_time,
                     duration,
-                    scores,
-                    features,
+                    result.scores,
+                    result.features,
                     openai_api_key,
                 )
 
         logger.info(
-            "Best cut point: %.4fs (frame: %d, score: %.3f)",
+            "Best cut point: %.4fs (frame: %d, score: %.4f)",
             best_frame.timestamp,
             best_frame.frame_index,
             best_frame.score,
@@ -129,7 +120,7 @@ def get_cut_frame(
 def get_ranked_cut_frames(
     source: str,
     n: int = 5,
-    config: Optional[RankingConfig] = None,
+    ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
@@ -141,7 +132,7 @@ def get_ranked_cut_frames(
     Args:
         source: Video file path or direct video URL
         n: Number of top cut points to return (default: 5)
-        config: Optional custom RankingConfig for scoring weights
+        ranking_config: Optional custom RankingConfig for scoring weights
         sample_rate: Process every Nth frame (default: 1)
         use_energy_refinement: If True, refines VAD with energy drops
         energy_threshold_db: Minimum dB drop to consider speech end
@@ -158,16 +149,11 @@ def get_ranked_cut_frames(
     if n < 1:
         raise ValueError("n must be at least 1")
 
-    logger.info("SceneFlow: Finding top %d cut points", n)
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         speech_end_time = detect_speech_end(
@@ -185,22 +171,21 @@ def get_ranked_cut_frames(
 
         duration = get_video_duration(video_path)
 
-        logger.info("Stage 2: Ranking frames based on visual quality...")
-        logger.info("Analyzing frames from %.4fs to %.4fs", speech_end_time, duration)
-
-        ranker = CutPointRanker(config)
-        ranked_frames = ranker.rank_frames(
+        ranker = CutPointRanker(ranking_config)
+        result = ranker.rank_frames(
             video_path=video_path,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
         )
 
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        top_timestamps = [frame.timestamp for frame in ranked_frames[:n]]
-        logger.info("Top %d cut points found", len(top_timestamps))
+        top_timestamps = [frame.timestamp for frame in result.ranked_frames[:n]]
+        logger.info(
+            "Found top %d cut points: best at %.4fs", len(top_timestamps), top_timestamps[0]
+        )
         return top_timestamps
 
     finally:
@@ -211,7 +196,7 @@ def get_ranked_cut_frames(
 def cut_video(
     source: str,
     output_path: str,
-    config: Optional[RankingConfig] = None,
+    ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
     save_frames: bool = False,
     save_logs: bool = False,
@@ -231,7 +216,7 @@ def cut_video(
     Args:
         source: Video file path or direct video URL
         output_path: Output path for the cut video (required)
-        config: Optional custom RankingConfig for scoring weights
+        ranking_config: Optional custom RankingConfig for scoring weights
         sample_rate: Process every Nth frame (default: 1)
         save_frames: If True, saves annotated frames with landmarks
         save_logs: If True, saves detailed analysis logs
@@ -245,16 +230,11 @@ def cut_video(
     Returns:
         Timestamp in seconds of the best cut point
     """
-    logger.info("SceneFlow: Cutting video at optimal point")
-
     video_path = source
     is_url_source = is_url(source)
 
     if is_url_source:
-        logger.info("Source is URL, downloading video...")
         video_path = download_video(source)
-    else:
-        logger.info("Analyzing local video: %s", source)
 
     try:
         speech_end_time = detect_speech_end(
@@ -268,54 +248,48 @@ def cut_video(
             logger.info(
                 "Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time
             )
-            ranker = CutPointRanker(config)
-            ranker._save_cut_video(video_path, speech_end_time, output_path=output_path)
+            _cut_video_util(video_path, speech_end_time, output_path)
             return speech_end_time
 
         duration = get_video_duration(video_path)
 
-        ranker = CutPointRanker(config)
+        ranker = CutPointRanker(ranking_config)
+        result = ranker.rank_frames(
+            video_path=video_path,
+            start_time=speech_end_time,
+            end_time=duration,
+            sample_rate=sample_rate,
+        )
 
-        rank_kwargs = {
-            "video_path": video_path,
-            "start_time": speech_end_time,
-            "end_time": duration,
-            "sample_rate": sample_rate,
-            "save_frames": save_frames,
-            "save_video": not use_llm_selection,
-            "output_path": output_path if not use_llm_selection else None,
-        }
-
-        if save_logs:
-            rank_kwargs["save_logs"] = True
-
-        ranked_frames = ranker.rank_frames(**rank_kwargs)
-
-        if not ranked_frames:
+        if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        best_frame = ranked_frames[0]
+        best_frame = result.ranked_frames[0]
 
-        if use_llm_selection and len(ranked_frames) > 1:
-            features = ranker.last_features
-            scores = ranker.last_scores
-
-            if features and scores:
+        if use_llm_selection and len(result.ranked_frames) > 1:
+            if result.features and result.scores:
                 best_frame = select_best_with_llm(
                     video_path,
-                    ranked_frames,
+                    result.ranked_frames,
                     speech_end_time,
                     duration,
-                    scores,
-                    features,
+                    result.scores,
+                    result.features,
                     openai_api_key,
                 )
 
-        if use_llm_selection:
-            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output_path)
+        # Handle side effects after best frame is determined
+        if save_frames:
+            save_annotated_frames(video_path, result.ranked_frames, ranker.extractor)
+
+        if save_logs and result.features and result.scores:
+            save_analysis_logs(video_path, result.ranked_frames, result.features, result.scores)
+
+        _cut_video_util(video_path, best_frame.timestamp, output_path)
 
         logger.info(
-            "Best cut point: %.4fs (frame: %d, score: %.3f)",
+            "Cut video saved to %s (best cut point: %.4fs, frame: %d, score: %.4f)",
+            output_path,
             best_frame.timestamp,
             best_frame.frame_index,
             best_frame.score,

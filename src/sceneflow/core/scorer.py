@@ -91,10 +91,11 @@ class FrameScorer:
             )
 
         logger.info(
-            "Scored %d frames: best=%.3f, worst=%.3f",
+            "Scored %d frames: best=%.4f, worst=%.4f, mean=%.4f",
             len(scores),
             max(s.final_score for s in scores),
             min(s.final_score for s in scores),
+            sum(s.final_score for s in scores) / len(scores),
         )
 
         return scores

@@ -13,10 +13,15 @@ Example:
 """
 
 import logging
+import os
+import sys
+from contextlib import contextmanager
 from typing import Tuple
 
 import cv2
 import numpy as np
+
+os.environ["ORT_LOGGING_LEVEL"] = "4"  # Fatal errors only
 
 try:
     from insightface.app import FaceAnalysis
@@ -31,6 +36,23 @@ from sceneflow.extraction.face_metrics import calculate_ear, calculate_mar
 from sceneflow.shared.models import FaceMetrics
 
 logger = logging.getLogger(__name__)
+
+logging.getLogger("insightface").setLevel(logging.ERROR)
+
+
+@contextmanager
+def suppress_stdout_stderr():
+    """Context manager to suppress stdout and stderr."""
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = devnull
+        sys.stderr = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
 
 # Landmark indices for 106-point model
@@ -62,17 +84,21 @@ class FeatureExtractor:
         """
         self.min_face_confidence = min_face_confidence
 
-        logger.info("Initializing InsightFace with 106-landmark detection...")
-
         try:
-            self.app = FaceAnalysis(
-                allowed_modules=["detection", "landmark_2d_106"], providers=["CPUExecutionProvider"]
-            )
-            self.app.prepare(
-                ctx_id=-1,
-                det_size=(INSIGHTFACE.DEFAULT_DET_SIZE.width, INSIGHTFACE.DEFAULT_DET_SIZE.height),
-            )
-            logger.info("Successfully loaded InsightFace 106-landmark model")
+            # Suppress verbose ONNX and InsightFace output during initialization
+            with suppress_stdout_stderr():
+                self.app = FaceAnalysis(
+                    allowed_modules=["detection", "landmark_2d_106"],
+                    providers=["CPUExecutionProvider"],
+                )
+                self.app.prepare(
+                    ctx_id=-1,
+                    det_size=(
+                        INSIGHTFACE.DEFAULT_DET_SIZE.width,
+                        INSIGHTFACE.DEFAULT_DET_SIZE.height,
+                    ),
+                )
+            logger.info("InsightFace 106-landmark model loaded")
         except Exception as e:
             raise InsightFaceError(
                 f"Failed to load 106-landmark model (required for EAR/MAR): {e}"

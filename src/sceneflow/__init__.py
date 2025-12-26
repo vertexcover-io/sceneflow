@@ -14,7 +14,7 @@ from sceneflow.shared import RankingConfig, FrameFeatures, FrameScore, RankedFra
 
 # Core classes
 from sceneflow.core import CutPointRanker
-from sceneflow.detection import SpeechDetector, EnergyRefiner
+from sceneflow.detection import SpeechDetector, refine_speech_end
 
 # Airtable integration (optional - only import if available)
 try:
@@ -45,7 +45,7 @@ __all__ = [
     # Core classes
     "CutPointRanker",
     "SpeechDetector",
-    "EnergyRefiner",
+    "refine_speech_end",
     # Configuration
     "RankingConfig",
     # Data models

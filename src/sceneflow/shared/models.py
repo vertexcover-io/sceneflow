@@ -115,3 +115,16 @@ class RankedFrame:
 
     def __repr__(self) -> str:
         return f"RankedFrame(rank={self.rank}, time={self.timestamp:.4f}s, score={self.score:.4f})"
+
+
+@dataclass
+class RankingResult:
+    """Result of frame ranking analysis.
+
+    Contains ranked frames and optionally the raw features and scores
+    used to compute the rankings.
+    """
+
+    ranked_frames: List[RankedFrame]
+    features: Optional[List[FrameFeatures]] = None
+    scores: Optional[List[FrameScore]] = None

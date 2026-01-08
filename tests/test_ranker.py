@@ -267,7 +267,12 @@ class TestAsyncParity:
         def reset_iterator(*_args, **_kwargs):
             return iter(frames)
 
+        async def async_iterator(*_args, **_kwargs):
+            for item in frames:
+                yield item
+
         mock_session.iterate_frames.side_effect = reset_iterator
+        mock_session.iterate_frames_async = async_iterator
 
         with patch.object(
             ranker.extractor,

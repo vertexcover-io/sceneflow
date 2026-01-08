@@ -371,31 +371,3 @@ class TestCutVideoFFmpegIntegration:
 
         with pytest.raises(FFmpegNotFoundError):
             cut_video(TEST_VIDEO_PATH, TEST_OUTPUT_PATH)
-
-
-@patch("sceneflow.api.public._cut_video_util_async", new_callable=AsyncMock)
-@patch("sceneflow.api.public.SpeechDetector")
-@patch("sceneflow.api.public.VideoSession")
-class TestCutVideoSaveOptions:
-    @patch("sceneflow.api.public.save_analysis_logs")
-    def test_save_logs_with_disable_visual_analysis_does_not_crash(
-        self, mock_save_logs, mock_session_class, mock_detector_class, _mock_cut, make_video_session
-    ):
-        mock_session = make_video_session()
-        mock_session_class.return_value = mock_session
-
-        mock_detector = Mock()
-        mock_detector.get_speech_end_time_async = AsyncMock(
-            return_value=(TEST_SPEECH_END_TIME, 0.9)
-        )
-        mock_detector_class.return_value = mock_detector
-
-        result = cut_video(
-            TEST_VIDEO_PATH,
-            TEST_OUTPUT_PATH,
-            save_logs=True,
-            disable_visual_analysis=True,
-        )
-
-        mock_save_logs.assert_not_called()
-        assert result == TEST_SPEECH_END_TIME

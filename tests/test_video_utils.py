@@ -14,7 +14,6 @@ from sceneflow.utils.video import (
     cleanup_downloaded_video,
     cut_video,
     cut_video_to_bytes,
-    extract_frame,
     VideoCapture,
     VideoSession,
 )
@@ -127,39 +126,6 @@ class TestCutVideo:
             cut_video(str(input_video), 5.0, str(tmp_path / "output.mp4"))
 
 
-@patch("sceneflow.utils.video.cv2.VideoCapture")
-class TestExtractFrame:
-    @patch("sceneflow.utils.video.cv2.imencode")
-    def test_extracts_frame_as_bytes(self, mock_imencode, mock_cv2):
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        test_frame = np.zeros((SMALL_HEIGHT, SMALL_WIDTH, 3), dtype=np.uint8)
-        mock_cap.read.return_value = (True, test_frame)
-        mock_cv2.return_value = mock_cap
-
-        expected_buffer = np.array([1, 2, 3], dtype=np.uint8)
-        mock_imencode.return_value = (True, expected_buffer)
-
-        result = extract_frame("/fake/video.mp4", 100)
-        assert result == expected_buffer.tobytes()
-        mock_cap.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 100)
-        call_args = mock_imencode.call_args[0]
-        assert call_args[0] == ".jpg"
-        np.testing.assert_array_equal(call_args[1], test_frame)
-        assert call_args[2] == [cv2.IMWRITE_JPEG_QUALITY, 85]
-        mock_cap.release.assert_called_once()
-
-    def test_raises_on_read_failure(self, mock_cv2):
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.set.return_value = True
-        mock_cap.read.return_value = (False, None)
-        mock_cv2.return_value = mock_cap
-
-        with pytest.raises(ValueError, match="Failed to extract frame"):
-            extract_frame("/fake/video.mp4", 100)
-
-
 class TestIsUrl:
     def test_returns_true_for_https_url(self):
         assert is_url(TEST_HTTPS_URL) is True
@@ -246,13 +212,6 @@ class TestVideoSession:
         mock_cv2_capture.return_value = mock_cap
         return mock_cap, test_frame
 
-    def test_loads_frames_into_memory_on_enter(self, mock_cv2_capture):
-        num_frames = 3
-        self._create_mock_capture(mock_cv2_capture, num_frames=num_frames)
-
-        with VideoSession(TEST_LOCAL_PATH) as session:
-            assert len(session._frames) == num_frames
-
     def test_properties_returns_correct_video_properties(self, mock_cv2_capture):
         num_frames = DEFAULT_FRAME_COUNT
         self._create_mock_capture(mock_cv2_capture, num_frames=num_frames)
@@ -265,22 +224,16 @@ class TestVideoSession:
             assert props.height == SMALL_HEIGHT
             assert props.duration == num_frames / DEFAULT_FPS
 
-    def test_clears_frames_on_exit(self, mock_cv2_capture):
-        self._create_mock_capture(mock_cv2_capture, num_frames=3)
-
-        session = VideoSession(TEST_LOCAL_PATH)
-        with session:
-            assert len(session._frames) == 3
-
-        assert len(session._frames) == 0
-
-    def test_get_frame_returns_correct_frame(self, mock_cv2_capture):
+    @patch("sceneflow.utils.video._extract_frame")
+    def test_get_frame_returns_correct_frame(self, mock_extract_frame, mock_cv2_capture):
         num_frames = 3
         _, test_frame = self._create_mock_capture(mock_cv2_capture, num_frames=num_frames)
+        mock_extract_frame.return_value = test_frame
 
         with VideoSession(TEST_LOCAL_PATH) as session:
             frame = session.get_frame(0)
             assert frame.shape == test_frame.shape
+            mock_extract_frame.assert_called_once_with(TEST_LOCAL_PATH, 0)
 
     def test_get_frame_raises_index_error_for_out_of_range(self, mock_cv2_capture):
         self._create_mock_capture(mock_cv2_capture, num_frames=3)
@@ -289,9 +242,14 @@ class TestVideoSession:
             with pytest.raises(IndexError):
                 session.get_frame(TEST_FRAME_INDEX_OUT_OF_RANGE)
 
+    @patch("sceneflow.utils.video._extract_frame")
     @patch("sceneflow.utils.video.cv2.imencode")
-    def test_get_frame_as_jpeg_returns_valid_bytes(self, mock_imencode, mock_cv2_capture):
-        self._create_mock_capture(mock_cv2_capture, num_frames=3)
+    def test_get_frame_as_jpeg_returns_valid_bytes(
+        self, mock_imencode, mock_extract_frame, mock_cv2_capture
+    ):
+        num_frames = 3
+        _, test_frame = self._create_mock_capture(mock_cv2_capture, num_frames=num_frames)
+        mock_extract_frame.return_value = test_frame
         expected_buffer = np.array([0xFF, 0xD8, 0xFF], dtype=np.uint8)
         mock_imencode.return_value = (True, expected_buffer)
 

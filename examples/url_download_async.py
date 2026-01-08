@@ -10,7 +10,7 @@ This example shows how to analyze videos from URLs asynchronously:
 
 import asyncio
 import logging
-from sceneflow import get_cut_frame_async, get_ranked_cut_frames_async
+from sceneflow import get_cut_frames_async
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -35,7 +35,7 @@ async def example_single_url():
         # 3. Analyze frames
         # 4. Return the best cut point
         # 5. Clean up the downloaded video after processing
-        best_time = await get_cut_frame_async(video_url)
+        best_time = (await get_cut_frames_async(video_url))[0]
 
         print()
         print("=" * 60)
@@ -62,7 +62,7 @@ async def example_ranked_url():
     print()
 
     try:
-        top_5 = await get_ranked_cut_frames_async(video_url, n=5)
+        top_5 = await get_cut_frames_async(video_url, n=5)
 
         print()
         print("=" * 60)

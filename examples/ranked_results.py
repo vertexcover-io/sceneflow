@@ -1,5 +1,5 @@
 """
-Ranked Results Example - get_ranked_cut_frames()
+Ranked Results Example - get_cut_frames()
 
 This example shows how to get multiple cut point options:
 - Get top N best cut points
@@ -8,7 +8,7 @@ This example shows how to get multiple cut point options:
 """
 
 import logging
-from sceneflow import get_ranked_cut_frames
+from sceneflow import get_cut_frames
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -22,7 +22,7 @@ def main():
     print("=" * 60)
     print(f"Finding top {n_results} cut points in: {video_path}")
     print()
-    top_cuts = get_ranked_cut_frames(video_path, n=n_results, disable_visual_analysis=True)
+    top_cuts = get_cut_frames(video_path, n=n_results, disable_visual_analysis=True)
 
     print()
     print("=" * 60)

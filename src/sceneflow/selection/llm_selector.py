@@ -1,16 +1,29 @@
-import asyncio
+"""LLM-based frame selection using GPT-4o vision."""
+
 import os
 import base64
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional
 
 from openai import OpenAI, AsyncOpenAI
 
 from sceneflow.shared.models import RankedFrame
-from sceneflow.utils.video import extract_frame_at_timestamp
+from sceneflow.shared.constants import LLM
+from sceneflow.utils.video import VideoSession
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FrameExtractionResult:
+    idx: int
+    data: Optional[dict]
+    error: Optional[str] = None
+
+    @property
+    def success(self) -> bool:
+        return self.data is not None
 
 
 class LLMFrameSelector:
@@ -21,26 +34,17 @@ class LLMFrameSelector:
                 "OpenAI API key not found. Set OPENAI_API_KEY environment variable or pass api_key parameter."
             )
         self.client = OpenAI(api_key=self.api_key)
-        self._async_client: Optional[AsyncOpenAI] = None
-
-    @property
-    def async_client(self) -> AsyncOpenAI:
-        if self._async_client is None:
-            self._async_client = AsyncOpenAI(api_key=self.api_key)
-        return self._async_client
 
     def select_best_frame(
         self,
-        video_path: str,
+        session: "VideoSession",
         ranked_frames: List[RankedFrame],
         speech_end_time: float,
         video_duration: float,
     ) -> RankedFrame:
         """Select the best frame from top candidates using LLM vision analysis.
 
-        Uses parallel frame extraction to speed up image loading. Each extraction
-        opens its own VideoCapture instance, which is thread-safe since they don't
-        share state.
+        Uses cached frames from VideoSession when available.
         """
         if len(ranked_frames) == 0:
             raise ValueError("No frames provided for selection")
@@ -48,10 +52,9 @@ class LLMFrameSelector:
         if len(ranked_frames) == 1:
             return ranked_frames[0]
 
-        # Take top 5 candidates for LLM analysis
-        candidates = ranked_frames[:5]
-        frames_data = self._extract_frames_parallel(
-            video_path, candidates, speech_end_time, video_duration
+        candidates = ranked_frames[: LLM.TOP_CANDIDATES_COUNT]
+        frames_data = self._extract_frames_from_session(
+            session, candidates, speech_end_time, video_duration
         )
 
         if not frames_data:
@@ -60,56 +63,32 @@ class LLMFrameSelector:
         selected_index = self._call_openai_vision(frames_data, video_duration, speech_end_time)
         return frames_data[selected_index]["frame"]
 
-    def _extract_frames_parallel(
+    def _extract_frames_from_session(
         self,
-        video_path: str,
+        session: "VideoSession",
         candidates: List[RankedFrame],
         speech_end_time: float,
         video_duration: float,
     ) -> List[dict]:
-        """Extract frame images in parallel using ThreadPoolExecutor.
+        """Extract frame images from VideoSession."""
+        frames_data = []
 
-        Returns a list of frame data dicts with index, frame, image_bytes, and metadata,
-        ordered by the original candidate ranking (preserves order).
-        """
-        num_frames = len(candidates)
-        max_workers = min(num_frames, os.cpu_count() or 4)
-
-        def extract_single(args: Tuple[int, RankedFrame]) -> Tuple[int, dict]:
-            idx, frame = args
+        for idx, frame in enumerate(candidates, 1):
             try:
-                image_bytes = self._extract_frame_image(video_path, frame.timestamp)
+                image_bytes = session.get_frame_as_jpeg(frame.frame_index)
                 metadata = self._build_metadata(frame, speech_end_time, video_duration)
-                return (
-                    idx,
+                frames_data.append(
                     {
                         "index": idx,
                         "frame": frame,
                         "image_bytes": image_bytes,
                         "metadata": metadata,
-                    },
+                    }
                 )
             except Exception as e:
                 logger.error("Failed to extract frame at %.4fs: %s", frame.timestamp, e)
-                return (idx, None)
 
-        # Submit all extraction tasks
-        results: List[Tuple[int, dict]] = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            tasks = [(idx, frame) for idx, frame in enumerate(candidates, 1)]
-            futures = [executor.submit(extract_single, task) for task in tasks]
-
-            for future in as_completed(futures):
-                result = future.result()
-                if result[1] is not None:
-                    results.append(result)
-
-        # Sort by original index to preserve ranking order
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results]
-
-    def _extract_frame_image(self, video_path: str, timestamp: float) -> bytes:
-        return extract_frame_at_timestamp(video_path, timestamp)
+        return frames_data
 
     def _build_metadata(
         self, frame: RankedFrame, speech_end_time: float, video_duration: float
@@ -165,7 +144,10 @@ class LLMFrameSelector:
             )
 
         response = self.client.chat.completions.create(
-            model="gpt-4o", messages=messages, max_tokens=10, temperature=0
+            model=LLM.MODEL_NAME,
+            messages=messages,
+            max_tokens=LLM.MAX_TOKENS,
+            temperature=LLM.TEMPERATURE,
         )
 
         response_text = response.choices[0].message.content.strip()
@@ -195,33 +177,33 @@ class LLMFrameSelector:
             )
             return 0
 
+    # -------------------------
+    # Async Methods
+    # -------------------------
+
+    @property
+    def async_client(self) -> AsyncOpenAI:
+        if not hasattr(self, "_async_client"):
+            self._async_client = AsyncOpenAI(api_key=self.api_key)
+        return self._async_client
+
     async def select_best_frame_async(
         self,
-        video_path: str,
+        session: "VideoSession",
         ranked_frames: List[RankedFrame],
         speech_end_time: float,
         video_duration: float,
     ) -> RankedFrame:
-        """
-        Async version of select_best_frame.
-
-        Select the best frame from top candidates using LLM vision analysis.
-        Frame extraction runs in thread pool, OpenAI API call is async.
-        """
+        """Async version of select_best_frame."""
         if len(ranked_frames) == 0:
             raise ValueError("No frames provided for selection")
 
         if len(ranked_frames) == 1:
             return ranked_frames[0]
 
-        candidates = ranked_frames[:5]
-
-        """
-        Frame extraction is CPU-bound (OpenCV), so we run it in thread pool
-        while the async context allows other coroutines to run.
-        """
-        frames_data = await asyncio.to_thread(
-            self._extract_frames_parallel, video_path, candidates, speech_end_time, video_duration
+        candidates = ranked_frames[: LLM.TOP_CANDIDATES_COUNT]
+        frames_data = await self._extract_frames_from_session_async(
+            session, candidates, speech_end_time, video_duration
         )
 
         if not frames_data:
@@ -232,10 +214,37 @@ class LLMFrameSelector:
         )
         return frames_data[selected_index]["frame"]
 
+    async def _extract_frames_from_session_async(
+        self,
+        session: "VideoSession",
+        candidates: List[RankedFrame],
+        speech_end_time: float,
+        video_duration: float,
+    ) -> List[dict]:
+        """Async version of _extract_frames_from_session."""
+        frames_data = []
+
+        for idx, frame in enumerate(candidates, 1):
+            try:
+                image_bytes = await session.get_frame_as_jpeg_async(frame.frame_index)
+                metadata = self._build_metadata(frame, speech_end_time, video_duration)
+                frames_data.append(
+                    {
+                        "index": idx,
+                        "frame": frame,
+                        "image_bytes": image_bytes,
+                        "metadata": metadata,
+                    }
+                )
+            except Exception as e:
+                logger.error("Failed to extract frame at %.4fs: %s", frame.timestamp, e)
+
+        return frames_data
+
     async def _call_openai_vision_async(
         self, frames_data: List[dict], video_duration: float, speech_end_time: float
     ) -> int:
-        """Async version of _call_openai_vision using AsyncOpenAI client."""
+        """Async version of _call_openai_vision."""
         prompt = self._build_prompt(frames_data, video_duration, speech_end_time)
 
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
@@ -250,7 +259,10 @@ class LLMFrameSelector:
             )
 
         response = await self.async_client.chat.completions.create(
-            model="gpt-4o", messages=messages, max_tokens=10, temperature=0
+            model=LLM.MODEL_NAME,
+            messages=messages,
+            max_tokens=LLM.MAX_TOKENS,
+            temperature=LLM.TEMPERATURE,
         )
 
         response_text = response.choices[0].message.content.strip()

@@ -37,8 +37,8 @@ async def basic_example_async():
     best_time = await cut_video_async(
         video_path,
         output_path,
-        # save_frames=True,
-        # save_logs=True,
+        save_frames=True,
+        save_logs=True,
         use_energy_refinement=True,
         energy_threshold_db=10,
         sample_rate=1,

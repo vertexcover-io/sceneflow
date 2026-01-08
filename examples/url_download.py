@@ -8,7 +8,7 @@ This example shows how to analyze videos from URLs:
 """
 
 import logging
-from sceneflow import get_cut_frame, get_ranked_cut_frames
+from sceneflow import get_cut_frames
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -33,7 +33,7 @@ def example_single_url():
         # 3. Analyze frames
         # 4. Return the best cut point
         # 5. Clean up the downloaded video after processing
-        best_time = get_cut_frame(video_url)
+        best_time = get_cut_frames(video_url)[0]
 
         print()
         print("=" * 60)
@@ -60,7 +60,7 @@ def example_ranked_url():
     print()
 
     try:
-        top_5 = get_ranked_cut_frames(video_url, n=5)
+        top_5 = get_cut_frames(video_url, n=5)
 
         print()
         print("=" * 60)

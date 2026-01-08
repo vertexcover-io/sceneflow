@@ -117,14 +117,6 @@ class SecurityError(SceneFlowError):
     pass
 
 
-class PathTraversalError(SecurityError):
-    """Raised when path traversal attempt is detected."""
-
-    def __init__(self, path: str):
-        self.path = path
-        super().__init__(f"Path traversal detected in: {path}")
-
-
 class InvalidURLError(SecurityError):
     """Raised when URL is invalid or suspicious."""
 

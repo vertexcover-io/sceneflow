@@ -15,7 +15,7 @@ except ImportError:
 
 from sceneflow.shared.constants import VIDEO
 from sceneflow.shared.models import RankedFrame, FrameScore, FrameFeatures
-from sceneflow.utils.video import extract_frame, cut_video_to_bytes
+from sceneflow.utils.video import VideoSession, cut_video_to_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -245,17 +245,8 @@ class AirtableUploader:
             raise RuntimeError(f"Airtable upload failed: {str(e)}")
 
     def _extract_frame_image(self, video_path: str, frame_index: int) -> bytes:
-        """
-        Extract a specific frame from video as JPEG bytes.
-
-        Args:
-            video_path: Path to video file
-            frame_index: Frame number to extract
-
-        Returns:
-            JPEG image as bytes
-        """
-        return extract_frame(video_path, frame_index, VIDEO.JPEG_QUALITY_HIGH)
+        with VideoSession(video_path) as session:
+            return session.get_frame_as_jpeg(frame_index, VIDEO.JPEG_QUALITY_HIGH)
 
     def _generate_cut_video(self, video_path: str, cut_timestamp: float) -> bytes:
         """
@@ -362,7 +353,6 @@ def upload_to_airtable(
         RuntimeError: If upload fails or credentials are missing
     """
     uploader = AirtableUploader(access_token, base_id, table_name)
-    uploader.ensure_table_schema()
     return uploader.upload_analysis(
         video_path, best_frame, frame_score, frame_features, speech_end_time, duration, config_dict
     )

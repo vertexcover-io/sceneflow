@@ -5,11 +5,16 @@ __pycache__/
 *.so
 .Python
 
+demo_test/
+
 # Virtual environments
 .venv/
 venv/
 ENV/
 env/
+docs/
+.env
+.claude
 
 # Distribution / packaging
 build/

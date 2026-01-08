@@ -6,18 +6,16 @@ common operations.
 
 from sceneflow.utils.video import (
     VideoCapture,
-    get_video_properties,
+    VideoSession,
     is_url,
     download_video,
     cleanup_downloaded_video,
-    validate_video_path,
 )
 
 __all__ = [
     "VideoCapture",
-    "get_video_properties",
+    "VideoSession",
     "is_url",
     "download_video",
     "cleanup_downloaded_video",
-    "validate_video_path",
 ]

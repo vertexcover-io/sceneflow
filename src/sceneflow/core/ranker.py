@@ -1,5 +1,6 @@
 """Frame ranking for podcast/talking head cut point detection."""
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -48,20 +49,6 @@ class CutPointRanker:
         end_time: float,
         sample_rate: int = 1,
     ) -> RankingResult:
-        """
-        Rank frames in the given time range for optimal cut points.
-
-        Args:
-            video_path: Path to video file
-            start_time: Start timestamp in seconds
-            end_time: End timestamp in seconds
-            sample_rate: Process every Nth frame (1 = all frames)
-
-        Returns:
-            RankingResult containing ranked_frames, features, and scores.
-            Also stores in last_features and last_scores for backward compatibility.
-        """
-        # Extract features from all frames
         features = self._extract_features(video_path, start_time, end_time, sample_rate)
 
         if not features:
@@ -71,13 +58,10 @@ class CutPointRanker:
 
         logger.info("Extracted features from %d frames", len(features))
 
-        # Compute scores
         scores = self.scorer.compute_scores(features)
 
-        # Sort by final score (descending)
         sorted_scores = sorted(scores, key=lambda x: x.final_score, reverse=True)
 
-        # Create ranked frame objects
         ranked_frames = [
             RankedFrame(
                 rank=i + 1,
@@ -88,7 +72,6 @@ class CutPointRanker:
             for i, score in enumerate(sorted_scores)
         ]
 
-        # Store internals for backward compatibility
         self.last_features = features
         self.last_scores = scores
 
@@ -153,3 +136,59 @@ class CutPointRanker:
 
         logger.info("Extracted features from %d frames", len(features))
         return features
+
+    async def rank_frames_async(
+        self,
+        video_path: str,
+        start_time: float,
+        end_time: float,
+        sample_rate: int = 1,
+    ) -> RankingResult:
+        """
+        Async version of rank_frames.
+
+        Rank frames in the given time range for optimal cut points.
+
+        Args:
+            video_path: Path to video file
+            start_time: Start timestamp in seconds
+            end_time: End timestamp in seconds
+            sample_rate: Process every Nth frame (1 = all frames)
+
+        Returns:
+            RankingResult containing ranked_frames, features, and scores.
+            Also stores in last_features and last_scores for backward compatibility.
+        """
+        features = await asyncio.to_thread(
+            self._extract_features, video_path, start_time, end_time, sample_rate
+        )
+
+        if not features:
+            raise NoValidFramesError(
+                f"No features extracted from {video_path} in range {start_time:.4f}-{end_time:.4f}s"
+            )
+
+        logger.info("Extracted features from %d frames", len(features))
+
+        scores = self.scorer.compute_scores(features)
+
+        sorted_scores = sorted(scores, key=lambda x: x.final_score, reverse=True)
+
+        ranked_frames = [
+            RankedFrame(
+                rank=i + 1,
+                frame_index=score.frame_index,
+                timestamp=score.timestamp,
+                score=score.final_score,
+            )
+            for i, score in enumerate(sorted_scores)
+        ]
+
+        self.last_features = features
+        self.last_scores = scores
+
+        return RankingResult(
+            ranked_frames=ranked_frames,
+            features=features,
+            scores=scores,
+        )

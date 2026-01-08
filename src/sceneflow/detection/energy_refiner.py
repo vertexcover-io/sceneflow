@@ -20,50 +20,15 @@ warnings.filterwarnings("ignore", message="PySoundFile failed")
 warnings.filterwarnings("ignore", message=".*audioread.*")
 
 
-def refine_speech_end(
+def _build_refinement_result(
+    refined_frame: int,
+    vad_frame: int,
     vad_timestamp: float,
-    video_path: str,
-    threshold_db: float = 8.0,
-    lookback_frames: int = 10,
-    min_silence_frames: int = 3,
+    fps: float,
+    energy_levels: dict[int, float],
 ) -> EnergyRefinementResult:
-    """
-    Refine VAD timestamp by finding actual speech end via energy drop.
-
-    Args:
-        vad_timestamp: Rough timestamp from Silero VAD
-        video_path: Path to video file
-        threshold_db: Minimum dB drop to consider speech end (default: 8.0)
-        lookback_frames: Maximum frames to search backward for local refinement (default: 10)
-        min_silence_frames: Consecutive low-energy frames required (default: 3)
-
-    Returns:
-        EnergyRefinementResult dataclass with refined timestamp and metadata
-    """
-    props = get_video_properties(video_path)
-    fps = props.fps
-    vad_frame = int(vad_timestamp * fps)
-
-    # Load audio
-    y, sr = librosa.load(video_path, sr=None)
-
-    # Define search range
-    start_frame = max(0, vad_frame - lookback_frames)
-    end_frame = vad_frame
-
-    # Extract energy levels for all frames in range
-    energy_levels = _extract_energy_levels(y, sr, fps, start_frame, end_frame)
-
-    # Find speech end frame
-    refined_frame = _find_speech_end_frame(
-        energy_levels, start_frame, end_frame, threshold_db, min_silence_frames
-    )
-
-    # Calculate metadata
-    # If no refinement occurred, use original VAD timestamp to preserve precision
-    # Otherwise use frame-based timestamp
     if refined_frame == vad_frame:
-        refined_timestamp = vad_timestamp  # Preserve original precision
+        refined_timestamp = vad_timestamp
         energy_drop = 0.0
     else:
         refined_timestamp = refined_frame / fps
@@ -90,6 +55,31 @@ def refine_speech_end(
         logger.debug("Energy refinement: no adjustment needed")
 
     return result
+
+
+def refine_speech_end(
+    vad_timestamp: float,
+    video_path: str,
+    threshold_db: float = 8.0,
+    lookback_frames: int = 10,
+    min_silence_frames: int = 3,
+) -> EnergyRefinementResult:
+    props = get_video_properties(video_path)
+    fps = props.fps
+    vad_frame = int(vad_timestamp * fps)
+
+    y, sr = librosa.load(video_path, sr=None)
+
+    start_frame = max(0, vad_frame - lookback_frames)
+    end_frame = vad_frame
+
+    energy_levels = _extract_energy_levels(y, sr, fps, start_frame, end_frame)
+
+    refined_frame = _find_speech_end_frame(
+        energy_levels, start_frame, end_frame, threshold_db, min_silence_frames
+    )
+
+    return _build_refinement_result(refined_frame, vad_frame, vad_timestamp, fps, energy_levels)
 
 
 def _extract_energy_levels(
@@ -232,3 +222,74 @@ def _verify_continuous_silence(
             break
 
     return consecutive_silence >= min_silence_frames
+
+
+async def refine_speech_end_async(
+    vad_timestamp: float,
+    video_path: str,
+    threshold_db: float = 8.0,
+    lookback_frames: int = 10,
+    min_silence_frames: int = 3,
+) -> EnergyRefinementResult:
+    """
+    Async version of refine_speech_end.
+
+    Refine VAD timestamp by finding actual speech end via energy drop.
+
+    Args:
+        vad_timestamp: Rough timestamp from Silero VAD
+        video_path: Path to video file
+        threshold_db: Minimum dB drop to consider speech end (default: 8.0)
+        lookback_frames: Maximum frames to search backward for local refinement (default: 10)
+        min_silence_frames: Consecutive low-energy frames required (default: 3)
+
+    Returns:
+        EnergyRefinementResult dataclass with refined timestamp and metadata
+    """
+    import asyncio
+
+    props = await asyncio.to_thread(get_video_properties, video_path)
+    fps = props.fps
+    vad_frame = int(vad_timestamp * fps)
+
+    y, sr = await asyncio.to_thread(librosa.load, video_path, sr=None)
+
+    start_frame = max(0, vad_frame - lookback_frames)
+    end_frame = vad_frame
+
+    energy_levels = await asyncio.to_thread(
+        _extract_energy_levels, y, sr, fps, start_frame, end_frame
+    )
+
+    refined_frame = _find_speech_end_frame(
+        energy_levels, start_frame, end_frame, threshold_db, min_silence_frames
+    )
+
+    if refined_frame == vad_frame:
+        refined_timestamp = vad_timestamp
+        energy_drop = 0.0
+    else:
+        refined_timestamp = refined_frame / fps
+        energy_drop = energy_levels.get(refined_frame - 1, 0) - energy_levels.get(refined_frame, 0)
+
+    result = EnergyRefinementResult(
+        refined_timestamp=refined_timestamp,
+        vad_frame=vad_frame,
+        vad_timestamp=vad_timestamp,
+        refined_frame=refined_frame,
+        energy_drop_db=energy_drop,
+        energy_levels=energy_levels,
+    )
+
+    if refined_frame != vad_frame:
+        logger.debug(
+            "Energy refinement: VAD %.4fs → Refined %.4fs (%d frames, %.2f dB drop)",
+            vad_timestamp,
+            refined_timestamp,
+            vad_frame - refined_frame,
+            energy_drop,
+        )
+    else:
+        logger.debug("Energy refinement: no adjustment needed")
+
+    return result

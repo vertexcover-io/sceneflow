@@ -109,6 +109,19 @@ class FFmpegConstants:
     TIMEOUT_SECONDS: int = 300
 
 
+@dataclass(frozen=True)
+class LLMConstants:
+    """Constants for LLM-based frame selection."""
+
+    # Selection parameters
+    TOP_CANDIDATES_COUNT: int = 5
+
+    # OpenAI API configuration
+    MODEL_NAME: str = "gpt-4o"
+    MAX_TOKENS: int = 10
+    TEMPERATURE: float = 0
+
+
 # Create singleton instances for easy import
 VIDEO = VideoConstants()
 VAD = VADConstants()
@@ -116,6 +129,13 @@ EAR = EARConstants()
 MAR = MARConstants()
 INSIGHTFACE = InsightFaceConstants()
 FFMPEG = FFmpegConstants()
+LLM = LLMConstants()
+
+
+SMALL_MOVEMENT_TOLERANCE_PIXELS: float = 5.0
+
+DEFAULT_CPU_COUNT_FALLBACK: int = 4
+MAX_FRAME_WORKERS: int = 8
 
 
 # Type aliases for clarity

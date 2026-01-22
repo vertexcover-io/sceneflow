@@ -11,42 +11,34 @@ import cv2
 import numpy as np
 
 from sceneflow.shared.models import FrameFeatures, FrameScore, RankedFrame
-from sceneflow.utils.video import VideoCapture
-from sceneflow.shared.constants import INSIGHTFACE
+from sceneflow.shared.constants import INSIGHTFACE, MAX_FRAME_WORKERS, DEFAULT_CPU_COUNT_FALLBACK
 from sceneflow.extraction import FeatureExtractor
+from sceneflow.utils.video import VideoSession
 
 logger = logging.getLogger(__name__)
 
 
 def save_annotated_frames(
-    video_path: str,
+    session: "VideoSession",
     ranked_frames: List[RankedFrame],
     extractor: FeatureExtractor,
 ) -> None:
     """Save annotated frames with landmarks color-coded.
 
     Args:
-        video_path: Path to the video file
+        session: VideoSession with open video (uses cached frames when available)
         ranked_frames: List of ranked frames to save
         extractor: FeatureExtractor instance for drawing landmarks
     """
-    video_base_name = Path(video_path).stem
+    video_base_name = Path(session.video_path).stem
     output_dir = Path("output") / video_base_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Tuple[path, annotated frame images]
     frames_to_write: List[Tuple[str, np.ndarray]] = []
 
-    with VideoCapture(video_path) as cap:
-        for ranked_frame in ranked_frames:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, ranked_frame.frame_index)
-            ret, frame = cap.read()
-
-            if not ret:
-                logger.warning("Failed to read frame %d for saving", ranked_frame.frame_index)
-                continue
-
-            # Annotate frame with landmarks
+    for ranked_frame in ranked_frames:
+        try:
+            frame = session.get_frame(ranked_frame.frame_index)
             annotated_frame = _draw_landmarks(frame, extractor)
 
             output_filename = (
@@ -56,12 +48,16 @@ def save_annotated_frames(
             )
             output_path = str(output_dir / output_filename)
             frames_to_write.append((output_path, annotated_frame))
+        except Exception as e:
+            logger.warning("Failed to read frame %d for saving: %s", ranked_frame.frame_index, e)
 
     if not frames_to_write:
         logger.warning("No frames to save")
         return
 
-    max_workers = min(8, os.cpu_count() or 4, len(frames_to_write))
+    max_workers = min(
+        MAX_FRAME_WORKERS, os.cpu_count() or DEFAULT_CPU_COUNT_FALLBACK, len(frames_to_write)
+    )
     saved_count = 0
     failed_count = 0
 
@@ -98,15 +94,7 @@ def save_analysis_logs(
     scores: List[FrameScore],
     vad_timestamps: Optional[List[Dict[str, float]]] = None,
 ) -> None:
-    """Save detailed analysis logs.
-
-    Args:
-        video_path: Path to the video file
-        ranked_frames: List of ranked frames
-        features: List of extracted features
-        scores: List of computed scores
-        vad_timestamps: Optional list of VAD speech segments
-    """
+    """Save detailed analysis logs."""
     video_base_name = Path(video_path).stem
     output_dir = Path("output") / video_base_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +102,6 @@ def save_analysis_logs(
     frame_to_features = {f.frame_index: f for f in features}
     frame_to_scores = {s.frame_index: s for s in scores}
 
-    # Tuple[path, frame logs to write]
     logs_to_write: List[Tuple[str, dict]] = []
 
     for ranked_frame in ranked_frames:
@@ -147,7 +134,6 @@ def save_analysis_logs(
         output_path = str(output_dir / output_filename)
         logs_to_write.append((output_path, log_data))
 
-    # Add VAD timestamps log if available
     if vad_timestamps:
         vad_log_data = {
             "speech_segments": [{"start": seg.start, "end": seg.end} for seg in vad_timestamps],
@@ -160,7 +146,9 @@ def save_analysis_logs(
         logger.warning("No logs to save")
         return
 
-    max_workers = min(8, os.cpu_count() or 4, len(logs_to_write))
+    max_workers = min(
+        MAX_FRAME_WORKERS, os.cpu_count() or DEFAULT_CPU_COUNT_FALLBACK, len(logs_to_write)
+    )
     saved_count = 0
     failed_count = 0
 
@@ -195,31 +183,15 @@ def save_analysis_logs(
 
 
 def _draw_landmarks(frame: np.ndarray, extractor: FeatureExtractor) -> np.ndarray:
-    """Draw InsightFace 106 landmarks on frame with color coding.
-
-    Colors:
-    - Blue: Eyes (indices 37-48)
-    - Red: Mouth (indices 52-71)
-    - Beige: Other landmarks
-
-    Args:
-        frame: Input frame (BGR format)
-        extractor: FeatureExtractor instance for accessing InsightFace app
-
-    Returns:
-        Frame with landmarks drawn
-    """
-    # Make a copy to avoid modifying original
+    """Draw InsightFace 106 landmarks on frame with color coding."""
     annotated = frame.copy()
 
-    # Get face with landmarks
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     faces = extractor.app.get(rgb_frame)
 
     if not faces:
         return annotated
 
-    # Use the largest face
     face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
     if not hasattr(face, "landmark_2d_106") or face.landmark_2d_106 is None:
@@ -227,14 +199,11 @@ def _draw_landmarks(frame: np.ndarray, extractor: FeatureExtractor) -> np.ndarra
 
     landmarks = face.landmark_2d_106.astype(int)
 
-    # Define color coding (BGR format for OpenCV)
-    BLUE = (255, 0, 0)  # Eyes
-    RED = (0, 0, 255)  # Mouth
-    BEIGE = (220, 245, 245)  # Other landmarks
+    BLUE = (255, 0, 0)
+    RED = (0, 0, 255)
+    BEIGE = (220, 245, 245)
 
-    # Draw all 106 landmarks with appropriate colors
     for i, (x, y) in enumerate(landmarks):
-        # Determine color based on index
         if (
             INSIGHTFACE.LEFT_EYE_START <= i < INSIGHTFACE.LEFT_EYE_END
             or INSIGHTFACE.RIGHT_EYE_START <= i < INSIGHTFACE.RIGHT_EYE_END

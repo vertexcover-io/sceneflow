@@ -5,7 +5,7 @@ import math
 from typing import List, Dict
 
 from sceneflow.shared.config import RankingConfig
-from sceneflow.shared.constants import EAR, MAR
+from sceneflow.shared.constants import EAR, MAR, SMALL_MOVEMENT_TOLERANCE_PIXELS
 from sceneflow.shared.models import FrameFeatures, FrameScore
 
 logger = logging.getLogger(__name__)
@@ -16,10 +16,10 @@ class FrameScorer:
     Scorer for podcast/talking head videos.
 
     Scoring logic:
-    - Eye score: Penalize blinks (low EAR) and wide eyes (high EAR)
-    - Mouth score: Penalize open mouth (high MAR)
-    - Sharpness score: Penalize blurry/motion blur frames
-    - Consistency score: Penalize frames with sudden face movement
+    - Eye openness: Penalize blinks (low EAR) and wide eyes (high EAR)
+    - Expression neutrality: Penalize open mouth (high MAR)
+    - Visual sharpness: Penalize blurry/motion blur frames
+    - Motion/pose stability: Penalize frames with sudden face movement
     """
 
     def __init__(self, config: RankingConfig):
@@ -65,12 +65,15 @@ class FrameScorer:
                 sharpness_score = 0.0
                 consistency_score = 0.0
 
-            # Weighted combination
+            motion_pose_weight = (
+                self.config.motion_stability_weight + self.config.pose_stability_weight
+            )
+
             final_score = (
-                self.config.eye_weight * eye_score
-                + self.config.mouth_weight * mouth_score
-                + self.config.sharpness_weight * sharpness_score
-                + self.config.consistency_weight * consistency_score
+                self.config.eye_openness_weight * eye_score
+                + self.config.expression_neutrality_weight * mouth_score
+                + self.config.visual_sharpness_weight * sharpness_score
+                + motion_pose_weight * consistency_score
             )
 
             scores.append(
@@ -169,12 +172,14 @@ class FrameScorer:
             avg_delta = sum(deltas) / len(deltas)
 
             # Score: 1.0 if no movement, decreases as movement increases
-            if avg_delta <= 5:  # Small movement tolerance
+            if avg_delta <= SMALL_MOVEMENT_TOLERANCE_PIXELS:
                 scores[feat.frame_index] = 1.0
             elif avg_delta >= max_delta:
                 scores[feat.frame_index] = 0.0
             else:
-                scores[feat.frame_index] = 1.0 - (avg_delta - 5) / (max_delta - 5)
+                scores[feat.frame_index] = 1.0 - (avg_delta - SMALL_MOVEMENT_TOLERANCE_PIXELS) / (
+                    max_delta - SMALL_MOVEMENT_TOLERANCE_PIXELS
+                )
 
         return scores
 

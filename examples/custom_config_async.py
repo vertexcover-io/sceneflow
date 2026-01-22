@@ -11,8 +11,7 @@ This example shows how to customize the ranking algorithm asynchronously:
 import asyncio
 import logging
 from sceneflow import (
-    get_cut_frame_async,
-    get_ranked_cut_frames_async,
+    get_cut_frames_async,
     cut_video_async,
     RankingConfig,
 )
@@ -38,7 +37,7 @@ async def example_custom_weights():
     # Note: Weights must sum to 1.0
 
     print("\nUsing custom weights (prioritizing eyes and motion)...")
-    best_time = await get_cut_frame_async(video_path, config=config)
+    best_time = (await get_cut_frames_async(video_path, config=config))[0]
     print(f"\n✓ Best cut point: {best_time:.2f}s")
 
 
@@ -56,7 +55,7 @@ async def example_performance_tuning():
     # sample_rate=3: Process every 3rd frame (faster, still good quality)
 
     print("\nUsing sample_rate=3 for faster processing...")
-    best_time = await get_cut_frame_async(video_path, sample_rate=3)
+    best_time = (await get_cut_frames_async(video_path, sample_rate=3))[0]
     print(f"\n✓ Best cut point: {best_time:.2f}s")
 
 
@@ -102,7 +101,7 @@ async def example_combined():
     )
 
     print("\nGetting top 3 cut points with custom weights...")
-    top_3 = await get_ranked_cut_frames_async(video_path, n=3, config=config, sample_rate=2)
+    top_3 = await get_cut_frames_async(video_path, n=3, config=config, sample_rate=2)
 
     print("\n✓ Top 3 cut points:")
     for i, timestamp in enumerate(top_3, 1):

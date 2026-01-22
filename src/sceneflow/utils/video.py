@@ -8,7 +8,7 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import urlparse
 from contextlib import contextmanager, asynccontextmanager
 import subprocess
@@ -23,16 +23,24 @@ import requests
 
 from sceneflow.shared.constants import VIDEO
 from sceneflow.shared.exceptions import (
-    VideoNotFoundError,
     VideoOpenError,
     VideoPropertiesError,
     VideoDownloadError,
     InvalidURLError,
-    UnsupportedFormatError,
 )
 from sceneflow.shared.models import VideoProperties
+from dataclasses import dataclass, field
+from typing import Iterator, Tuple
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_temp_files_to_cleanup: List[str] = []
+
+
+def _register_temp_file(path: str) -> None:
+    """Register a temp file for cleanup on process exit."""
+    _temp_files_to_cleanup.append(path)
 
 
 def is_url(source: str) -> bool:
@@ -52,45 +60,6 @@ def is_url(source: str) -> bool:
         False
     """
     return source.startswith(("http://", "https://"))
-
-
-def validate_video_path(path: str) -> Path:
-    """
-    Validate and sanitize video file path.
-
-    Args:
-        path: Path to video file
-
-    Returns:
-        Validated and resolved Path object
-
-    Raises:
-        VideoNotFoundError: If file doesn't exist
-        PathTraversalError: If path contains traversal attempts
-        UnsupportedFormatError: If file extension not supported
-
-    Example:
-        >>> path = validate_video_path("/videos/sample.mp4")
-        >>> print(path.exists())
-        True
-    """
-    from sceneflow.shared.exceptions import PathTraversalError
-
-    video_path = Path(path).resolve()
-
-    # Check for path traversal
-    if ".." in video_path.parts:
-        raise PathTraversalError(str(path))
-
-    # Check file exists
-    if not video_path.exists():
-        raise VideoNotFoundError(str(path))
-
-    # Check extension
-    if video_path.suffix.lower() not in VIDEO.SUPPORTED_EXTENSIONS:
-        raise UnsupportedFormatError(str(path), video_path.suffix)
-
-    return video_path
 
 
 def validate_video_url(url: str) -> str:
@@ -269,80 +238,162 @@ def temporary_video_download(url: str):
 class VideoCapture:
     """
     Context manager for OpenCV VideoCapture with automatic resource cleanup.
-
-    This ensures video capture objects are always properly released,
-    even when exceptions occur.
-
-    Example:
-        >>> with VideoCapture("/path/to/video.mp4") as cap:
-        ...     fps = cap.get(cv2.CAP_PROP_FPS)
-        ...     # Use cap...
-        # Automatically released here
     """
 
     def __init__(self, video_path: str):
-        """
-        Initialize VideoCapture context manager.
-
-        Args:
-            video_path: Path to video file
-        """
         self.video_path = video_path
         self.cap: Optional[cv2.VideoCapture] = None
 
     def __enter__(self) -> cv2.VideoCapture:
-        """Open video capture."""
         self.cap = cv2.VideoCapture(self.video_path)
         if not self.cap.isOpened():
+            self.cap.release()
             raise VideoOpenError(self.video_path, "VideoCapture.isOpened() returned False")
         return self.cap
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Release video capture."""
         if self.cap is not None:
             self.cap.release()
-        return False  # Don't suppress exceptions
+            self.cap = None
+        return False
 
 
-def get_video_properties(video_path: str) -> VideoProperties:
+@dataclass
+class VideoSession:
     """
-    Extract video properties (fps, frame count, duration, dimensions).
+    Safe video session.
 
-    Args:
-        video_path: Path to video file
+    TODO : __aenter__ and __aexit__ and move all the I/O
 
-    Returns:
-        VideoProperties dataclass with fps, frame_count, duration, width, height
-
-    Raises:
-        VideoOpenError: If video cannot be opened
-        VideoPropertiesError: If video has invalid properties
-
-    Example:
-        >>> props = get_video_properties("video.mp4")
-        >>> print(f"Duration: {props.duration:.2f}s")
-        Duration: 10.50s
+    Guarantees:
+    - Video decoded exactly once
+    - No shared decoder state
+    - Random access, iteration, caching all safe
     """
-    with VideoCapture(video_path) as cap:
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Validate properties
-        if fps <= 0 or frame_count <= 0:
-            raise VideoPropertiesError(
-                video_path, f"Invalid fps={fps} or frame_count={frame_count}"
+    video_path: str
+
+    _frames: List[np.ndarray] = field(default_factory=list, init=False, repr=False)
+    _properties: Optional[VideoProperties] = field(default=None, init=False, repr=False)
+    _audio_cache: Optional[Tuple[np.ndarray, int]] = field(default=None, init=False, repr=False)
+
+    # -------------------------
+    # Lifecycle
+    # -------------------------
+
+    def __enter__(self) -> "VideoSession":
+        with VideoCapture(self.video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            if fps <= 0 or frame_count <= 0:
+                raise VideoPropertiesError(
+                    self.video_path,
+                    f"Invalid fps={fps} or frame_count={frame_count}",
+                )
+
+            if width <= 0 or height <= 0:
+                raise VideoPropertiesError(self.video_path, f"Invalid dimensions: {width}x{height}")
+
+            self._properties = VideoProperties(
+                fps=fps,
+                frame_count=frame_count,
+                duration=frame_count / fps,
+                width=width,
+                height=height,
             )
 
-        if width <= 0 or height <= 0:
-            raise VideoPropertiesError(video_path, f"Invalid dimensions: {width}x{height}")
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                self._frames.append(frame.copy())
 
-        duration = frame_count / fps
+        return self
 
-        return VideoProperties(
-            fps=fps, frame_count=frame_count, duration=duration, width=width, height=height
-        )
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._frames.clear()
+        self._audio_cache = None
+        self._properties = None
+        return False
+
+    # -------------------------
+    # Properties
+    # -------------------------
+
+    @property
+    def properties(self) -> VideoProperties:
+        if self._properties is None:
+            raise RuntimeError("VideoSession not initialized")
+        return self._properties
+
+    # -------------------------
+    # Audio
+    # -------------------------
+
+    def get_audio(self, sr: Optional[int] = None) -> Tuple[np.ndarray, int]:
+        if self._audio_cache is None:
+            import librosa
+
+            audio, sample_rate = librosa.load(self.video_path, sr=sr)
+            self._audio_cache = (audio, sample_rate)
+        return self._audio_cache
+
+    async def get_audio_async(self, sr: Optional[int] = None) -> Tuple[np.ndarray, int]:
+        if self._audio_cache is None:
+            import librosa
+
+            audio, sample_rate = await asyncio.to_thread(librosa.load, self.video_path, sr=sr)
+            self._audio_cache = (audio, sample_rate)
+        return self._audio_cache
+
+    # -------------------------
+    # Frames (safe)
+    # -------------------------
+
+    def get_frame(self, frame_index: int) -> np.ndarray:
+        if frame_index < 0 or frame_index >= len(self._frames):
+            raise IndexError(f"Frame index out of range: {frame_index}")
+        return self._frames[frame_index].copy()
+
+    def get_frame_at_timestamp(self, timestamp: float) -> np.ndarray:
+        idx = int(timestamp * self.properties.fps)
+        return self.get_frame(idx)
+
+    def get_frame_as_jpeg(
+        self, frame_index: int, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
+    ) -> bytes:
+        frame = self.get_frame(frame_index)
+        ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+        if not ok:
+            raise ValueError("Failed to encode frame as JPEG")
+        return buffer.tobytes()
+
+    def get_frame_at_timestamp_as_jpeg(
+        self, timestamp: float, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
+    ) -> bytes:
+        idx = int(timestamp * self.properties.fps)
+        return self.get_frame_as_jpeg(idx, jpeg_quality)
+
+    # -------------------------
+    # Iteration
+    # -------------------------
+
+    def iterate_frames(
+        self,
+        start_frame: int,
+        end_frame: int,
+        sample_rate: int = 1,
+    ) -> Iterator[Tuple[int, np.ndarray]]:
+        end_frame = min(end_frame, len(self._frames) - 1)
+
+        for idx in range(start_frame, end_frame + 1):
+            if (idx - start_frame) % sample_rate != 0:
+                continue
+
+            yield idx, self._frames[idx].copy()
 
 
 def extract_frame(
@@ -384,34 +435,6 @@ def extract_frame(
         return buffer.tobytes()
 
 
-def extract_frame_at_timestamp(
-    video_path: str, timestamp: float, jpeg_quality: int = VIDEO.JPEG_QUALITY_DEFAULT
-) -> bytes:
-    """
-    Extract frame at specific timestamp from video as JPEG bytes.
-
-    Args:
-        video_path: Path to video file
-        timestamp: Timestamp in seconds
-        jpeg_quality: JPEG compression quality (0-100, default: 85)
-
-    Returns:
-        JPEG image as bytes
-
-    Raises:
-        VideoOpenError: If video cannot be opened
-        ValueError: If frame cannot be extracted
-
-    Example:
-        >>> frame_bytes = extract_frame_at_timestamp("video.mp4", 5.5)
-        >>> len(frame_bytes)
-        123456
-    """
-    props = get_video_properties(video_path)
-    frame_index = int(timestamp * props.fps)
-    return extract_frame(video_path, frame_index, jpeg_quality)
-
-
 def _resolve_output_path(video_path: str, output_path: Optional[str]) -> Path:
     if output_path:
         final_output_path = Path(output_path)
@@ -438,7 +461,7 @@ def cut_video(video_path: str, cut_timestamp: float, output_path: Optional[str] 
         "-c:a",
         FFMPEG.AUDIO_CODEC,
         "-y",
-        output_path,
+        str(final_output_path),
     ]
 
     try:
@@ -484,6 +507,8 @@ def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
         temp_path = temp_file.name
 
+    _register_temp_file(temp_path)
+
     try:
         cmd = [
             "ffmpeg",
@@ -515,6 +540,7 @@ def cut_video_to_bytes(video_path: str, cut_timestamp: float) -> bytes:
     finally:
         try:
             Path(temp_path).unlink()
+            _temp_files_to_cleanup.remove(temp_path)
         except Exception:
             pass
 
@@ -709,22 +735,3 @@ async def cut_video_async(
 
     except FileNotFoundError:
         raise FFmpegNotFoundError()
-
-
-async def get_video_properties_async(video_path: str) -> VideoProperties:
-    """
-    Async version of get_video_properties.
-
-    Extract video properties (fps, frame count, duration, dimensions).
-
-    Args:
-        video_path: Path to video file
-
-    Returns:
-        VideoProperties dataclass with fps, frame_count, duration, width, height
-
-    Raises:
-        VideoOpenError: If video cannot be opened
-        VideoPropertiesError: If video has invalid properties
-    """
-    return await asyncio.to_thread(get_video_properties, video_path)

@@ -1,23 +1,21 @@
-"""Public API package for SceneFlow.
-
-This package provides the main public API functions for finding optimal
-cut points in videos.
-"""
+"""Public API package for SceneFlow."""
 
 from sceneflow.api.public import (
-    get_cut_frame,
-    get_ranked_cut_frames,
+    AnalysisResult,
+    run_analysis_async,
+    get_cut_frames,
+    get_cut_frames_async,
     cut_video,
-    get_cut_frame_async,
-    get_ranked_cut_frames_async,
     cut_video_async,
 )
+from sceneflow.utils.video import cleanup_downloaded_video_async
 
 __all__ = [
-    "get_cut_frame",
-    "get_ranked_cut_frames",
+    "AnalysisResult",
+    "run_analysis_async",
+    "cleanup_downloaded_video_async",
+    "get_cut_frames",
+    "get_cut_frames_async",
     "cut_video",
-    "get_cut_frame_async",
-    "get_ranked_cut_frames_async",
     "cut_video_async",
 ]

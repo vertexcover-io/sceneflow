@@ -1,78 +1,58 @@
-"""High-level API functions for SceneFlow.
-
-This module provides the main public API functions for finding optimal
-cut points in videos using multi-stage analysis.
-"""
+"""Public API for SceneFlow."""
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import List, Optional
 
 from sceneflow.shared.config import RankingConfig
 from sceneflow.shared.exceptions import NoValidFramesError
+from sceneflow.shared.models import RankedFrame, RankingResult
 from sceneflow.core import CutPointRanker
 from sceneflow.utils.video import (
+    VideoSession,
     is_url,
-    download_video,
-    cleanup_downloaded_video,
-    get_video_properties,
-    cut_video as _cut_video_util,
     download_video_async,
     cleanup_downloaded_video_async,
-    get_video_properties_async,
     cut_video_async as _cut_video_util_async,
 )
 from sceneflow.utils.output import save_annotated_frames, save_analysis_logs
-from sceneflow.shared.pipeline import (
-    detect_speech_end,
-    detect_speech_end_async,
-    select_best_with_llm,
-    select_best_with_llm_async,
-)
+from sceneflow.detection import SpeechDetector
+from sceneflow.selection import LLMFrameSelector
 
 logger = logging.getLogger(__name__)
 
 
-def get_cut_frame(
-    source: str,
+@dataclass
+class AnalysisResult:
+    """Full analysis result with all internal data."""
+
+    ranked_frames: List[RankedFrame]
+    speech_end_time: float
+    duration: float
+    ranker: Optional[CutPointRanker] = None
+    ranking_result: Optional[RankingResult] = None
+
+
+async def run_analysis_async(
+    video_path: str,
     ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
-    use_llm_selection: bool = False,
-    openai_api_key: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
     disable_visual_analysis: bool = False,
-) -> float:
-    """Get the single best cut point timestamp for a video.
+    save_frames: bool = False,
+) -> AnalysisResult:
+    """Run full analysis pipeline with single video open.
 
     Args:
-        source: Video file path or direct video URL
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        use_llm_selection: If True, uses LLM to select best frame from top 5
-        openai_api_key: OpenAI API key (or use OPENAI_API_KEY env var)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and returns speech end time
-
-    Returns:
-        Timestamp in seconds of the best cut point
-
-    Note:
-        For Airtable integration, use analyze_and_upload_to_airtable() from
-        sceneflow.integration instead.
+        video_path: Local path to video file (URLs must be downloaded before calling)
     """
-    video_path = source
-    is_url_source = is_url(source)
-
-    if is_url_source:
-        video_path = download_video(source)
-
-    try:
-        speech_end_time, _ = detect_speech_end(
-            video_path,
+    with VideoSession(video_path) as session:
+        detector = SpeechDetector()
+        speech_end_time, _ = await detector.get_speech_end_time_async(
+            session,
             use_energy_refinement,
             energy_threshold_db,
             energy_lookback_frames,
@@ -82,104 +62,19 @@ def get_cut_frame(
             logger.info(
                 "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
             )
-            return speech_end_time
-
-        duration = get_video_properties(video_path).duration
-
-        ranker = CutPointRanker(ranking_config)
-        result = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-        )
-
-        if not result.ranked_frames:
-            raise NoValidFramesError("No valid frames found for ranking")
-
-        best_frame = result.ranked_frames[0]
-
-        if use_llm_selection and len(result.ranked_frames) > 1:
-            best_frame = select_best_with_llm(
-                video_path,
-                result.ranked_frames,
-                speech_end_time,
-                duration,
-                openai_api_key,
+            return AnalysisResult(
+                ranked_frames=[
+                    RankedFrame(rank=1, frame_index=0, timestamp=speech_end_time, score=1.0)
+                ],
+                speech_end_time=speech_end_time,
+                duration=speech_end_time,
             )
 
-        logger.info(
-            "Best cut point: %.4fs (frame: %d, score: %.4f)",
-            best_frame.timestamp,
-            best_frame.frame_index,
-            best_frame.score,
-        )
-        return best_frame.timestamp
-
-    finally:
-        if is_url_source:
-            cleanup_downloaded_video(video_path)
-
-
-async def get_cut_frame_async(
-    source: str,
-    ranking_config: Optional[RankingConfig] = None,
-    sample_rate: int = 1,
-    use_llm_selection: bool = False,
-    openai_api_key: Optional[str] = None,
-    use_energy_refinement: bool = True,
-    energy_threshold_db: float = 8.0,
-    energy_lookback_frames: int = 20,
-    disable_visual_analysis: bool = False,
-) -> float:
-    """
-    Async version of get_cut_frame.
-
-    Get the single best cut point timestamp for a video.
-
-    Args:
-        source: Video file path or direct video URL
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        use_llm_selection: If True, uses LLM to select best frame from top 5
-        openai_api_key: OpenAI API key (or use OPENAI_API_KEY env var)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and returns speech end time
-
-    Returns:
-        Timestamp in seconds of the best cut point
-
-    Note:
-        For Airtable integration, use analyze_and_upload_to_airtable() from
-        sceneflow.integration instead.
-    """
-    video_path = source
-    is_url_source = is_url(source)
-
-    if is_url_source:
-        video_path = await download_video_async(source)
-
-    try:
-        speech_end_time, _ = await detect_speech_end_async(
-            video_path,
-            use_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-        )
-
-        if disable_visual_analysis:
-            logger.info(
-                "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
-            )
-            return speech_end_time
-
-        duration = (await get_video_properties_async(video_path)).duration
-
+        duration = session.properties.duration
         ranker = CutPointRanker(ranking_config)
+
         result = await ranker.rank_frames_async(
-            video_path=video_path,
+            session=session,
             start_time=speech_end_time,
             end_time=duration,
             sample_rate=sample_rate,
@@ -188,35 +83,30 @@ async def get_cut_frame_async(
         if not result.ranked_frames:
             raise NoValidFramesError("No valid frames found for ranking")
 
-        best_frame = result.ranked_frames[0]
-
-        if use_llm_selection and len(result.ranked_frames) > 1:
-            best_frame = await select_best_with_llm_async(
-                video_path,
+        if save_frames:
+            await asyncio.to_thread(
+                save_annotated_frames,
+                session,
                 result.ranked_frames,
-                speech_end_time,
-                duration,
-                openai_api_key,
+                ranker.extractor,
             )
 
-        logger.info(
-            "Best cut point: %.4fs (frame: %d, score: %.4f)",
-            best_frame.timestamp,
-            best_frame.frame_index,
-            best_frame.score,
+        return AnalysisResult(
+            ranked_frames=result.ranked_frames,
+            speech_end_time=speech_end_time,
+            duration=duration,
+            ranker=ranker,
+            ranking_result=result,
         )
-        return best_frame.timestamp
-
-    finally:
-        if is_url_source:
-            await cleanup_downloaded_video_async(video_path)
 
 
-def get_ranked_cut_frames(
+async def get_cut_frames_async(
     source: str,
-    n: int = 5,
+    n: int = 1,
     ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
+    use_llm_selection: bool = False,
+    openai_api_key: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
@@ -224,146 +114,159 @@ def get_ranked_cut_frames(
 ) -> List[float]:
     """Get the top N best cut point timestamps for a video.
 
-    Args:
-        source: Video file path or direct video URL
-        n: Number of top cut points to return (default: 5)
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and returns speech end time only
-
-    Returns:
-        List of timestamps in seconds for the top N cut points
-
-    Note:
-        For Airtable integration, use analyze_ranked_and_upload_to_airtable() from
-        sceneflow.integration instead.
+    Handles URL downloads automatically. For local videos, use run_analysis_async directly.
     """
     if n < 1:
         raise ValueError("n must be at least 1")
 
     video_path = source
-    is_url_source = is_url(source)
+    is_downloaded = False
 
-    if is_url_source:
-        video_path = download_video(source)
+    if is_url(source):
+        video_path = await download_video_async(source)
+        is_downloaded = True
 
     try:
-        speech_end_time, _ = detect_speech_end(
-            video_path,
-            use_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-        )
-
-        if disable_visual_analysis:
-            logger.info(
-                "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
-            )
-            return [speech_end_time]
-
-        duration = get_video_properties(video_path).duration
-
-        ranker = CutPointRanker(ranking_config)
-        result = ranker.rank_frames(
+        analysis = await run_analysis_async(
             video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
+            ranking_config=ranking_config,
             sample_rate=sample_rate,
+            use_energy_refinement=use_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
+            disable_visual_analysis=disable_visual_analysis,
         )
 
-        if not result.ranked_frames:
-            raise NoValidFramesError("No valid frames found for ranking")
+        ranked_frames = list(analysis.ranked_frames)
 
-        top_timestamps = [frame.timestamp for frame in result.ranked_frames[:n]]
-        logger.info(
-            "Found top %d cut points: best at %.4fs", len(top_timestamps), top_timestamps[0]
-        )
-        return top_timestamps
+        # Apply LLM selection if requested and we have multiple frames
+        if use_llm_selection and n == 1 and len(ranked_frames) > 1:
+            selector = LLMFrameSelector(api_key=openai_api_key)
+            with VideoSession(video_path) as session:
+                best_frame = await selector.select_best_frame_async(
+                    session,
+                    ranked_frames,
+                    analysis.speech_end_time,
+                    analysis.duration,
+                )
+            # Move LLM-selected frame to front
+            ranked_frames.remove(best_frame)
+            ranked_frames.insert(0, best_frame)
 
+        timestamps = [f.timestamp for f in ranked_frames[:n]]
+        logger.info("Found top %d cut points: best at %.4fs", len(timestamps), timestamps[0])
+        return timestamps
     finally:
-        if is_url_source:
-            cleanup_downloaded_video(video_path)
+        if is_downloaded:
+            await cleanup_downloaded_video_async(video_path)
 
 
-async def get_ranked_cut_frames_async(
+def get_cut_frames(
     source: str,
-    n: int = 5,
+    n: int = 1,
     ranking_config: Optional[RankingConfig] = None,
     sample_rate: int = 1,
+    use_llm_selection: bool = False,
+    openai_api_key: Optional[str] = None,
     use_energy_refinement: bool = True,
     energy_threshold_db: float = 8.0,
     energy_lookback_frames: int = 20,
     disable_visual_analysis: bool = False,
 ) -> List[float]:
+    """Sync wrapper for get_cut_frames_async."""
+    return asyncio.run(
+        get_cut_frames_async(
+            source=source,
+            n=n,
+            ranking_config=ranking_config,
+            sample_rate=sample_rate,
+            use_llm_selection=use_llm_selection,
+            openai_api_key=openai_api_key,
+            use_energy_refinement=use_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
+            disable_visual_analysis=disable_visual_analysis,
+        )
+    )
+
+
+async def cut_video_async(
+    source: str,
+    output_path: str,
+    ranking_config: Optional[RankingConfig] = None,
+    sample_rate: int = 1,
+    save_frames: bool = False,
+    save_logs: bool = False,
+    use_llm_selection: bool = False,
+    openai_api_key: Optional[str] = None,
+    use_energy_refinement: bool = True,
+    energy_threshold_db: float = 8.0,
+    energy_lookback_frames: int = 20,
+    disable_visual_analysis: bool = False,
+) -> float:
+    """Find best cut point, save the cut video, and optionally save frames/logs.
+
+    Handles URL downloads automatically. For local videos, use run_analysis_async directly.
     """
-    Async version of get_ranked_cut_frames.
-
-    Get the top N best cut point timestamps for a video.
-
-    Args:
-        source: Video file path or direct video URL
-        n: Number of top cut points to return (default: 5)
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and returns speech end time only
-
-    Returns:
-        List of timestamps in seconds for the top N cut points
-
-    Note:
-        For Airtable integration, use analyze_ranked_and_upload_to_airtable() from
-        sceneflow.integration instead.
-    """
-    if n < 1:
-        raise ValueError("n must be at least 1")
-
     video_path = source
-    is_url_source = is_url(source)
+    is_downloaded = False
 
-    if is_url_source:
+    if is_url(source):
         video_path = await download_video_async(source)
+        is_downloaded = True
 
     try:
-        speech_end_time, _ = await detect_speech_end_async(
-            video_path,
-            use_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-        )
-
-        if disable_visual_analysis:
-            logger.info(
-                "Visual analysis disabled - returning speech end time: %.4fs", speech_end_time
-            )
-            return [speech_end_time]
-
-        duration = (await get_video_properties_async(video_path)).duration
-
-        ranker = CutPointRanker(ranking_config)
-        result = await ranker.rank_frames_async(
+        analysis = await run_analysis_async(
             video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
+            ranking_config=ranking_config,
             sample_rate=sample_rate,
+            use_energy_refinement=use_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
+            disable_visual_analysis=disable_visual_analysis,
+            save_frames=save_frames,
         )
 
-        if not result.ranked_frames:
-            raise NoValidFramesError("No valid frames found for ranking")
+        best_frame = analysis.ranked_frames[0]
 
-        top_timestamps = [frame.timestamp for frame in result.ranked_frames[:n]]
+        # Apply LLM selection if requested and we have multiple frames
+        if use_llm_selection and len(analysis.ranked_frames) > 1:
+            selector = LLMFrameSelector(api_key=openai_api_key)
+            with VideoSession(video_path) as session:
+                best_frame = await selector.select_best_frame_async(
+                    session,
+                    analysis.ranked_frames,
+                    analysis.speech_end_time,
+                    analysis.duration,
+                )
+
+        # Handle save_logs separately
+        if (
+            save_logs
+            and analysis.ranking_result
+            and analysis.ranking_result.features
+            and analysis.ranking_result.scores
+        ):
+            await asyncio.to_thread(
+                save_analysis_logs,
+                video_path,
+                analysis.ranked_frames,
+                analysis.ranking_result.features,
+                analysis.ranking_result.scores,
+            )
+
+        # Cut the video
+        await _cut_video_util_async(video_path, best_frame.timestamp, output_path)
+
         logger.info(
-            "Found top %d cut points: best at %.4fs", len(top_timestamps), top_timestamps[0]
+            "Cut video saved to %s (cut point: %.4fs, score: %.4f)",
+            output_path,
+            best_frame.timestamp,
+            best_frame.score,
         )
-        return top_timestamps
-
+        return best_frame.timestamp
     finally:
-        if is_url_source:
+        if is_downloaded:
             await cleanup_downloaded_video_async(video_path)
 
 
@@ -381,220 +284,20 @@ def cut_video(
     energy_lookback_frames: int = 20,
     disable_visual_analysis: bool = False,
 ) -> float:
-    """Cut a video at the optimal point and save the cut video.
-
-    This function finds the best cut point and always saves the cut video.
-    Optionally saves annotated frames and detailed logs.
-    Use get_cut_frame() if you only need the timestamp without saving.
-
-    Args:
-        source: Video file path or direct video URL
-        output_path: Output path for the cut video (required)
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        save_frames: If True, saves annotated frames with landmarks
-        save_logs: If True, saves detailed analysis logs
-        use_llm_selection: If True, uses LLM to select best frame from top 5
-        openai_api_key: OpenAI API key (or use OPENAI_API_KEY env var)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and cuts at speech end time
-
-    Returns:
-        Timestamp in seconds of the best cut point
-    """
-    video_path = source
-    is_url_source = is_url(source)
-
-    if is_url_source:
-        video_path = download_video(source)
-
-    try:
-        speech_end_time, _ = detect_speech_end(
-            video_path,
-            use_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-        )
-
-        if disable_visual_analysis:
-            logger.info(
-                "Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time
-            )
-            _cut_video_util(video_path, speech_end_time, output_path)
-            return speech_end_time
-
-        duration = get_video_properties(video_path).duration
-
-        ranker = CutPointRanker(ranking_config)
-        result = ranker.rank_frames(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
+    """Sync wrapper for cut_video_async."""
+    return asyncio.run(
+        cut_video_async(
+            source=source,
+            output_path=output_path,
+            ranking_config=ranking_config,
             sample_rate=sample_rate,
+            save_frames=save_frames,
+            save_logs=save_logs,
+            use_llm_selection=use_llm_selection,
+            openai_api_key=openai_api_key,
+            use_energy_refinement=use_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
+            disable_visual_analysis=disable_visual_analysis,
         )
-
-        if not result.ranked_frames:
-            raise NoValidFramesError("No valid frames found for ranking")
-
-        best_frame = result.ranked_frames[0]
-
-        if use_llm_selection and len(result.ranked_frames) > 1:
-            best_frame = select_best_with_llm(
-                video_path,
-                result.ranked_frames,
-                speech_end_time,
-                duration,
-                openai_api_key,
-            )
-
-        # Handle side effects after best frame is determined
-        if save_frames:
-            save_annotated_frames(video_path, result.ranked_frames, ranker.extractor)
-
-        if save_logs and result.features and result.scores:
-            save_analysis_logs(video_path, result.ranked_frames, result.features, result.scores)
-
-        _cut_video_util(video_path, best_frame.timestamp, output_path)
-
-        logger.info(
-            "Cut video saved to %s (best cut point: %.4fs, frame: %d, score: %.4f)",
-            output_path,
-            best_frame.timestamp,
-            best_frame.frame_index,
-            best_frame.score,
-        )
-        return best_frame.timestamp
-
-    finally:
-        if is_url_source:
-            cleanup_downloaded_video(video_path)
-
-
-async def cut_video_async(
-    source: str,
-    output_path: str,
-    ranking_config: Optional[RankingConfig] = None,
-    sample_rate: int = 1,
-    save_frames: bool = False,
-    save_logs: bool = False,
-    use_llm_selection: bool = False,
-    openai_api_key: Optional[str] = None,
-    use_energy_refinement: bool = True,
-    energy_threshold_db: float = 8.0,
-    energy_lookback_frames: int = 20,
-    disable_visual_analysis: bool = False,
-) -> float:
-    """
-    Async version of cut_video.
-
-    Cut a video at the optimal point and save the cut video.
-
-    This function finds the best cut point and always saves the cut video.
-    Optionally saves annotated frames and detailed logs.
-    Use get_cut_frame_async() if you only need the timestamp without saving.
-
-    Args:
-        source: Video file path or direct video URL
-        output_path: Output path for the cut video (required)
-        ranking_config: Optional custom RankingConfig for scoring weights
-        sample_rate: Process every Nth frame (default: 1)
-        save_frames: If True, saves annotated frames with landmarks
-        save_logs: If True, saves detailed analysis logs
-        use_llm_selection: If True, uses LLM to select best frame from top 5
-        openai_api_key: OpenAI API key (or use OPENAI_API_KEY env var)
-        use_energy_refinement: If True, refines VAD with energy drops
-        energy_threshold_db: Minimum dB drop to consider speech end
-        energy_lookback_frames: Max frames to search backward from VAD
-        disable_visual_analysis: If True, skips visual ranking and cuts at speech end time
-
-    Returns:
-        Timestamp in seconds of the best cut point
-    """
-    video_path = source
-    is_url_source = is_url(source)
-
-    if is_url_source:
-        video_path = await download_video_async(source)
-
-    try:
-        speech_end_time, _ = await detect_speech_end_async(
-            video_path,
-            use_energy_refinement,
-            energy_threshold_db,
-            energy_lookback_frames,
-        )
-
-        if disable_visual_analysis:
-            logger.info(
-                "Visual analysis disabled - cutting at speech end time: %.4fs", speech_end_time
-            )
-            await _cut_video_util_async(video_path, speech_end_time, output_path)
-            return speech_end_time
-
-        duration = (await get_video_properties_async(video_path)).duration
-
-        ranker = CutPointRanker(ranking_config)
-        result = await ranker.rank_frames_async(
-            video_path=video_path,
-            start_time=speech_end_time,
-            end_time=duration,
-            sample_rate=sample_rate,
-        )
-
-        if not result.ranked_frames:
-            raise NoValidFramesError("No valid frames found for ranking")
-
-        best_frame = result.ranked_frames[0]
-
-        if use_llm_selection and len(result.ranked_frames) > 1:
-            best_frame = await select_best_with_llm_async(
-                video_path,
-                result.ranked_frames,
-                speech_end_time,
-                duration,
-                openai_api_key,
-            )
-
-        side_effect_tasks = []
-
-        if save_frames:
-            side_effect_tasks.append(
-                asyncio.to_thread(
-                    save_annotated_frames,
-                    video_path,
-                    result.ranked_frames,
-                    ranker.extractor,
-                )
-            )
-
-        if save_logs and result.features and result.scores:
-            side_effect_tasks.append(
-                asyncio.to_thread(
-                    save_analysis_logs,
-                    video_path,
-                    result.ranked_frames,
-                    result.features,
-                    result.scores,
-                )
-            )
-
-        side_effect_tasks.append(
-            _cut_video_util_async(video_path, best_frame.timestamp, output_path)
-        )
-
-        await asyncio.gather(*side_effect_tasks)
-
-        logger.info(
-            "Cut video saved to %s (best cut point: %.4fs, frame: %d, score: %.4f)",
-            output_path,
-            best_frame.timestamp,
-            best_frame.frame_index,
-            best_frame.score,
-        )
-        return best_frame.timestamp
-
-    finally:
-        if is_url_source:
-            await cleanup_downloaded_video_async(video_path)
+    )

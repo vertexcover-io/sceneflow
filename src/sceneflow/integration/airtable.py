@@ -362,7 +362,6 @@ def upload_to_airtable(
         RuntimeError: If upload fails or credentials are missing
     """
     uploader = AirtableUploader(access_token, base_id, table_name)
-    uploader.ensure_table_schema()
     return uploader.upload_analysis(
         video_path, best_frame, frame_score, frame_features, speech_end_time, duration, config_dict
     )

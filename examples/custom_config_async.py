@@ -1,22 +1,28 @@
 """
-Custom Configuration Example
+Custom Configuration Example - Async Version
 
-This example shows how to customize the ranking algorithm:
+This example shows how to customize the ranking algorithm asynchronously:
 - Adjust scoring weights for different priorities
 - Control processing speed with sample_rate
 - Save outputs (frames, cut video)
+- Non-blocking execution for async applications
 """
 
+import asyncio
 import logging
-from sceneflow import get_cut_frames, cut_video, RankingConfig
+from sceneflow import (
+    get_cut_frames_async,
+    cut_video_async,
+    RankingConfig,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
-def example_custom_weights():
-    """Example 1: Custom scoring weights"""
+async def example_custom_weights():
+    """Example 1: Custom scoring weights (async)"""
     print("\n" + "=" * 60)
-    print("Example 1: Custom Scoring Weights")
+    print("Example 1: Custom Scoring Weights (Async)")
     print("=" * 60)
 
     video_path = "your_video.mp4"
@@ -31,14 +37,14 @@ def example_custom_weights():
     # Note: Weights must sum to 1.0
 
     print("\nUsing custom weights (prioritizing eyes and motion)...")
-    best_time = get_cut_frames(video_path, config=config)[0]
+    best_time = (await get_cut_frames_async(video_path, config=config))[0]
     print(f"\n✓ Best cut point: {best_time:.2f}s")
 
 
-def example_performance_tuning():
-    """Example 2: Performance tuning with sample_rate"""
+async def example_performance_tuning():
+    """Example 2: Performance tuning with sample_rate (async)"""
     print("\n" + "=" * 60)
-    print("Example 2: Performance Tuning")
+    print("Example 2: Performance Tuning (Async)")
     print("=" * 60)
 
     video_path = "your_video.mp4"
@@ -49,24 +55,24 @@ def example_performance_tuning():
     # sample_rate=3: Process every 3rd frame (faster, still good quality)
 
     print("\nUsing sample_rate=3 for faster processing...")
-    best_time = get_cut_frames(video_path, sample_rate=3)[0]
+    best_time = (await get_cut_frames_async(video_path, sample_rate=3))[0]
     print(f"\n✓ Best cut point: {best_time:.2f}s")
 
 
-def example_save_outputs():
-    """Example 3: Save annotated frames and cut video"""
+async def example_save_outputs():
+    """Example 3: Save annotated frames and cut video (async)"""
     print("\n" + "=" * 60)
-    print("Example 3: Save Outputs")
+    print("Example 3: Save Outputs (Async)")
     print("=" * 60)
 
     video_path = "your_video.mp4"
-    output_path = "output/your_video_cut.mp4"
+    output_path = "output/your_video_cut_async.mp4"
 
     print("\nAnalyzing video and saving outputs...")
     print("- Saving annotated frames with facial landmarks")
     print("- Saving cut video (requires ffmpeg)")
 
-    best_time = cut_video(
+    best_time = await cut_video_async(
         video_path,
         output_path,
         save_frames=True,  # Save frames with InsightFace landmarks
@@ -78,10 +84,10 @@ def example_save_outputs():
     print(f"  - Cut video: {output_path}")
 
 
-def example_combined():
-    """Example 4: Combine custom config with ranked results"""
+async def example_combined():
+    """Example 4: Combine custom config with ranked results (async)"""
     print("\n" + "=" * 60)
-    print("Example 4: Combined - Custom Config + Ranked Results")
+    print("Example 4: Combined - Custom Config + Ranked Results (Async)")
     print("=" * 60)
 
     video_path = "your_video.mp4"
@@ -95,24 +101,28 @@ def example_combined():
     )
 
     print("\nGetting top 3 cut points with custom weights...")
-    top_3 = get_cut_frames(video_path, n=3, config=config, sample_rate=2)
+    top_3 = await get_cut_frames_async(video_path, n=3, config=config, sample_rate=2)
 
     print("\n✓ Top 3 cut points:")
     for i, timestamp in enumerate(top_3, 1):
         print(f"  {i}. {timestamp:.2f}s")
 
 
-if __name__ == "__main__":
-    print("SceneFlow - Custom Configuration Examples")
+async def main():
+    print("SceneFlow - Custom Configuration Async Examples")
     print("=" * 60)
-    print("\nThis script demonstrates various configuration options.")
+    print("\nThis script demonstrates various async configuration options.")
     print("Uncomment the examples you want to run.\n")
 
     # Uncomment the examples you want to run:
 
-    # example_custom_weights()
-    # example_performance_tuning()
-    # example_save_outputs()
-    # example_combined()
+    # await example_custom_weights()
+    # await example_performance_tuning()
+    # await example_save_outputs()
+    # await example_combined()
 
     print("\nUncomment examples in the script to run them!")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

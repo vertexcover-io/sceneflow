@@ -1,5 +1,6 @@
-"""SceneFlow CLI - Find optimal cut points in talking head videos."""
+"""SceneFlow CLI."""
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -7,24 +8,20 @@ from typing import Annotated, Optional
 
 import cyclopts
 
-from sceneflow.shared.exceptions import VideoDownloadError, VideoNotFoundError
+from sceneflow.api import run_analysis_async, AnalysisResult
+from sceneflow.shared.config import RankingConfig
+from sceneflow.shared.exceptions import VideoDownloadError
+from typing import List
 from sceneflow.shared.models import RankedFrame
-from sceneflow.core import CutPointRanker
 from sceneflow.utils.video import (
     is_url,
-    download_video,
-    cleanup_downloaded_video,
-    get_video_duration,
-    validate_video_path,
+    download_video_async,
+    cleanup_downloaded_video_async,
+    cut_video_async as _cut_video_util_async,
+    VideoSession,
 )
-from sceneflow.cli._internal import (
-    print_verbose_header,
-    detect_speech_end_cli,
-    rank_frames_cli,
-    apply_llm_selection_cli,
-    print_results,
-    save_json_output,
-)
+from sceneflow.utils.output import save_analysis_logs
+from sceneflow.selection import LLMFrameSelector
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,14 +33,88 @@ app = cyclopts.App(
 )
 
 
+def _print_results(
+    best_frame: RankedFrame,
+    ranked_frames: List[RankedFrame],
+    top_n: Optional[int],
+) -> None:
+    """Print results based on mode (top-n or simple timestamp)."""
+    if top_n is not None:
+        n = min(top_n, len(ranked_frames))
+        for i, frame in enumerate(ranked_frames[:n], 1):
+            print(f"{i}. {frame.timestamp:.4f}s (score: {frame.score:.4f})")
+    else:
+        print(f"{best_frame.timestamp:.4f}")
+
+
+async def _upload_to_airtable(
+    video_path: str,
+    analysis: AnalysisResult,
+    best_frame: RankedFrame,
+    sample_rate: int,
+) -> None:
+    try:
+        from sceneflow.integration.airtable import upload_to_airtable
+
+        if (
+            not analysis.ranking_result
+            or not analysis.ranking_result.scores
+            or not analysis.ranking_result.features
+        ):
+            raise RuntimeError("Missing analysis data for Airtable upload")
+
+        best_score = next(
+            (s for s in analysis.ranking_result.scores if s.frame_index == best_frame.frame_index),
+            None,
+        )
+        best_features = next(
+            (
+                f
+                for f in analysis.ranking_result.features
+                if f.frame_index == best_frame.frame_index
+            ),
+            None,
+        )
+
+        if not best_score or not best_features:
+            raise RuntimeError("Could not find score and features for best frame")
+
+        default_config = RankingConfig()
+        config_dict = {
+            "sample_rate": sample_rate,
+            "weights": {
+                "eye_openness": default_config.eye_openness_weight,
+                "motion_stability": default_config.motion_stability_weight,
+                "expression_neutrality": default_config.expression_neutrality_weight,
+                "pose_stability": default_config.pose_stability_weight,
+                "visual_sharpness": default_config.visual_sharpness_weight,
+            },
+        }
+
+        record_id = await asyncio.to_thread(
+            upload_to_airtable,
+            video_path=video_path,
+            best_frame=best_frame,
+            frame_score=best_score,
+            frame_features=best_features,
+            speech_end_time=analysis.speech_end_time,
+            duration=analysis.duration,
+            config_dict=config_dict,
+            access_token=None,
+            base_id=None,
+            table_name=None,
+        )
+
+        logger.info("Uploaded to Airtable: %s", record_id)
+
+    except Exception as e:
+        logger.error("Failed to upload to Airtable: %s", e)
+        print(f"Error uploading to Airtable: {e}", file=sys.stderr)
+
+
 @app.default
-def main(
+async def main(
     source: Annotated[str, cyclopts.Parameter(help="Path to video file or URL")],
-    verbose: Annotated[bool, cyclopts.Parameter(help="Show detailed analysis information")] = False,
-    json_output: Annotated[
-        Optional[str],
-        cyclopts.Parameter(help="Save detailed analysis to JSON file (directory path)"),
-    ] = None,
     sample_rate: Annotated[
         int, cyclopts.Parameter(help="Process every Nth frame (default: 2)")
     ] = 2,
@@ -104,211 +175,90 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Analyze a talking head video and find the optimal cut point.
+    """Analyze a talking head video and find the optimal cut point."""
+    if not is_url(source) and not Path(source).exists():
+        print(f"Error: Video file not found: {source}", file=sys.stderr)
+        sys.exit(1)
 
-    The tool uses speech detection to find where speech ends, then analyzes
-    visual features to rank potential cut points based on eye openness,
-    motion stability, expression neutrality, pose stability, and visual sharpness.
-
-    Examples:
-        sceneflow video.mp4
-        sceneflow video.mp4 --top-n 5
-        sceneflow video.mp4 --verbose
-        sceneflow video.mp4 --json-output ./output
-        sceneflow https://example.com/video.mp4 --verbose
-        sceneflow video.mp4 --save-frames --save-logs
-        sceneflow video.mp4 --output /path/to/my_output.mp4
-        sceneflow video.mp4 --airtable --verbose
-        sceneflow video.mp4 --use-llm-selection --verbose
-        sceneflow video.mp4 --no-energy-refinement
-        sceneflow video.mp4 --energy-threshold-db 10.0 --energy-lookback-frames 25
-        sceneflow video.mp4 --disable-visual-analysis
-
-    Environment Variables:
-        AIRTABLE_ACCESS_TOKEN   Your Airtable access token
-        AIRTABLE_BASE_ID        Your Airtable base ID (e.g., appXXXXXXXXXXXXXX)
-        AIRTABLE_TABLE_NAME     Table name (optional, defaults to "SceneFlow Analysis")
-        OPENAI_API_KEY          OpenAI API key for LLM-powered frame selection
-    """
     video_path = source
     is_downloaded = False
 
+    if is_url(source):
+        video_path = await download_video_async(source)
+        is_downloaded = True
+
     try:
-        if is_url(source):
-            if verbose:
-                print("Downloading video from URL...")
-            logger.info("Source is URL, downloading video...")
-
-            try:
-                video_path = download_video(source)
-                is_downloaded = True
-                if verbose:
-                    print(f"Downloaded to: {video_path}")
-            except VideoDownloadError as e:
-                print(f"Error: {e}", file=sys.stderr)
-                sys.exit(1)
-        else:
-            try:
-                validate_video_path(source)
-            except VideoNotFoundError as e:
-                print(f"Error: {e}", file=sys.stderr)
-                sys.exit(1)
-            except Exception as e:
-                print(f"Error: {e}", file=sys.stderr)
-                sys.exit(1)
-
         logger.info("Analyzing video: %s", Path(video_path).name)
+        should_use_llm = use_llm_selection and not top_n
 
-        if verbose:
-            print_verbose_header(
-                video_path,
-                use_llm_selection,
-                no_energy_refinement,
-                energy_threshold_db,
-                energy_lookback_frames,
-            )
-
-        speech_end_time, confidence = detect_speech_end_cli(
-            video_path, no_energy_refinement, energy_threshold_db, energy_lookback_frames, verbose
+        analysis = await run_analysis_async(
+            video_path=video_path,
+            sample_rate=sample_rate,
+            use_energy_refinement=not no_energy_refinement,
+            energy_threshold_db=energy_threshold_db,
+            energy_lookback_frames=energy_lookback_frames,
+            disable_visual_analysis=disable_visual_analysis,
+            save_frames=save_frames,
         )
 
-        if disable_visual_analysis:
-            if verbose:
-                print(f"\n{'=' * 60}")
-                print("Visual analysis disabled - using speech end time")
-                print(f"{'=' * 60}")
-
-            ranked_frames = [
-                RankedFrame(timestamp=speech_end_time, frame_index=0, score=1.0, rank=1)
-            ]
-            ranker = None
-        else:
-            duration = get_video_duration(video_path)
-
-            if verbose:
-                print(f"      Video duration: {duration:.4f}s")
-
-            need_internals = use_llm_selection or airtable or json_output
-            ranked_frames, ranker = rank_frames_cli(
-                video_path,
-                speech_end_time,
-                duration,
-                sample_rate,
-                save_frames,
-                output,
-                save_logs,
-                need_internals,
-                verbose,
-            )
-
-        if not ranked_frames:
+        if not analysis.ranked_frames:
             logger.error("No suitable cut points found")
             print("Error: No suitable cut points found", file=sys.stderr)
             sys.exit(1)
 
-        logger.info("Successfully analyzed %d frames", len(ranked_frames))
+        logger.info("Successfully analyzed %d frames", len(analysis.ranked_frames))
 
-        best_frame = ranked_frames[0]
+        best_frame = analysis.ranked_frames[0]
 
-        if use_llm_selection and len(ranked_frames) > 1 and not top_n:
-            best_frame = apply_llm_selection_cli(
-                video_path, ranked_frames, speech_end_time, duration, verbose
-            )
-
-        if output and (use_llm_selection or airtable) and not top_n and ranker:
-            ranker._save_cut_video(video_path, best_frame.timestamp, output_path=output)
+        # Apply LLM selection if requested and we have multiple frames
+        if should_use_llm and len(analysis.ranked_frames) > 1:
+            selector = LLMFrameSelector(api_key=None)
+            with VideoSession(video_path) as session:
+                best_frame = await selector.select_best_frame_async(
+                    session,
+                    analysis.ranked_frames,
+                    analysis.speech_end_time,
+                    analysis.duration,
+                )
+            logger.info("LLM selected frame at %.4fs", best_frame.timestamp)
 
         logger.info("Best cut point: %.4fs (score: %.4f)", best_frame.timestamp, best_frame.score)
 
-        print_results(best_frame, ranked_frames, top_n, verbose, save_frames, output, video_path)
+        _print_results(best_frame, analysis.ranked_frames, top_n)
 
-        if airtable and not top_n and ranker:
-            try:
-                from sceneflow.integration.airtable import upload_to_airtable
-
-                if verbose:
-                    print(f"\n{'=' * 60}")
-                    print("AIRTABLE UPLOAD")
-                    print(f"{'=' * 60}")
-                    print("Uploading analysis to Airtable...")
-
-                best_score = next(
-                    (s for s in ranker.last_scores if s.frame_index == best_frame.frame_index),
-                    None,
-                )
-                best_features = next(
-                    (f for f in ranker.last_features if f.frame_index == best_frame.frame_index),
-                    None,
-                )
-
-                if not best_score or not best_features:
-                    raise RuntimeError("Could not find score and features for best frame")
-
-                config_dict = {
-                    "sample_rate": sample_rate,
-                    "weights": {
-                        "eye_openness": 0.30,
-                        "motion_stability": 0.25,
-                        "expression_neutrality": 0.20,
-                        "pose_stability": 0.15,
-                        "visual_sharpness": 0.10,
-                    },
-                }
-
-                record_id = upload_to_airtable(
-                    video_path=video_path,
-                    best_frame=best_frame,
-                    frame_score=best_score,
-                    frame_features=best_features,
-                    speech_end_time=speech_end_time,
-                    duration=duration,
-                    config_dict=config_dict,
-                    access_token=None,
-                    base_id=None,
-                    table_name=None,
-                )
-
-                if verbose:
-                    print(f"Successfully uploaded to Airtable! Record ID: {record_id}")
-
-            except Exception as e:
-                logger.error("Failed to upload to Airtable: %s", e)
-                print(f"Error uploading to Airtable: {e}", file=sys.stderr)
-                if verbose:
-                    import traceback
-
-                    traceback.print_exc()
-
-        if json_output:
-            if not ranker:
-                ranker = CutPointRanker()
-            save_json_output(
-                json_output,
+        if save_logs and analysis:
+            await asyncio.to_thread(
+                save_analysis_logs,
                 video_path,
-                duration,
-                speech_end_time,
-                confidence,
-                best_frame,
-                ranked_frames,
-                ranker,
-                sample_rate,
-                top_n,
-                verbose,
+                analysis.ranked_frames,
+                analysis.ranking_result.features,
+                analysis.ranking_result.scores,
             )
 
+        if output and (not top_n):
+            await _cut_video_util_async(video_path, best_frame.timestamp, output)
+            logger.info("Cut video saved to: %s", output)
+
+        if airtable and analysis:
+            await _upload_to_airtable(
+                video_path=video_path,
+                analysis=analysis,
+                best_frame=best_frame,
+                sample_rate=sample_rate,
+            )
+
+    except VideoDownloadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nAnalysis interrupted by user", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        if verbose:
-            import traceback
-
-            traceback.print_exc()
         sys.exit(1)
     finally:
         if is_downloaded:
-            cleanup_downloaded_video(video_path)
+            await cleanup_downloaded_video_async(video_path)
 
 
 if __name__ == "__main__":

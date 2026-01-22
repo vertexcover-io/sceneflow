@@ -1,28 +1,31 @@
 """
-Ranked Results Example - get_cut_frames()
+Ranked Results Example - get_cut_frames_async()
 
-This example shows how to get multiple cut point options:
+This example shows how to get multiple cut point options asynchronously:
 - Get top N best cut points
 - Compare multiple options
 - Choose the one that works best for your needs
+- Non-blocking execution for async applications
 """
 
+import asyncio
 import logging
-from sceneflow import get_cut_frames
+from sceneflow import get_cut_frames_async
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
-def main():
+async def main():
     video_path = "new_dataset/videos/scene1.mp4"
 
     n_results = 5
 
-    print("SceneFlow - Ranked Results Example")
+    print("SceneFlow - Ranked Results Async Example")
     print("=" * 60)
     print(f"Finding top {n_results} cut points in: {video_path}")
     print()
-    top_cuts = get_cut_frames(video_path, n=n_results, disable_visual_analysis=True)
+
+    top_cuts = await get_cut_frames_async(video_path, n=n_results, disable_visual_analysis=True)
 
     print()
     print("=" * 60)
@@ -36,4 +39,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
